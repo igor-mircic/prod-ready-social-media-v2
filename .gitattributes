@@ -1,0 +1,22 @@
+* text=auto eol=lf
+
+# Binary files
+*.jar binary
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tgz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+# Gradle wrapper
+gradle/wrapper/gradle-wrapper.jar binary
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+
+# Shell scripts always LF
+*.sh text eol=lf

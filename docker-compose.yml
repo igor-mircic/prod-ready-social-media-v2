@@ -1,0 +1,32 @@
+# Local-development dependencies for the monorepo.
+#
+# Currently provides a single Postgres service consumed by the backend's default
+# Spring profile. Future components (frontend dev tooling, e2e tests, additional
+# services like Redis or Kafka) extend this same file rather than spinning up
+# their own compose stacks.
+#
+# Start with: docker-compose up -d postgres
+#
+# Credentials below match the backend's default Spring profile in
+# backend/src/main/resources/application.yaml. Override either side via the
+# usual SPRING_DATASOURCE_* env vars when running the backend.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: social-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: social
+      POSTGRES_USER: social
+      POSTGRES_PASSWORD: social
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U social -d social"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
