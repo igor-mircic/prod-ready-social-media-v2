@@ -1,13 +1,14 @@
 schema: spec-driven
 
-# Project context (optional)
+# Project context
 # This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Backend: Java + Spring
+  Frontend: React
+  E2E tests: Playwright
+  Database: Postgres
+  Domain: Social media platform built to enterprise/production standards (auth, posts, follows, feed, etc. — scope grows as changes land).
+  Conventions: TBD — coding conventions, commit style, formatter, and test-framework choices will be decided in future changes as code starts landing. Do not invent conventions that have not been agreed.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
