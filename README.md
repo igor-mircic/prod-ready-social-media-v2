@@ -9,7 +9,7 @@ This repo is a flat monorepo. Each top-level directory is owned by one component
 | Directory   | Status      | Component                                         |
 | ----------- | ----------- | ------------------------------------------------- |
 | `backend/`  | exists      | Java 21 / Spring Boot 4 service (Gradle, Postgres) |
-| `frontend/` | reserved    | React web client (added by a future scaffold change) |
+| `frontend/` | exists      | React web client (Vite, TypeScript, pnpm)         |
 | `e2e/`      | reserved    | Playwright end-to-end tests (added by a future scaffold change) |
 | `infra/`    | reserved    | Infrastructure-as-code (added by a future scaffold change) |
 | `openspec/` | exists      | OpenSpec change/spec workflow                     |
@@ -27,9 +27,11 @@ point at this same file.
 docker-compose up -d postgres
 ```
 
-See `backend/README.md` for backend-specific run and test instructions.
+See `backend/README.md` for backend-specific run and test instructions, and
+`frontend/README.md` for the frontend dev loop.
 
 ## Prerequisites
 
 - Java 21
+- Node (version pinned in `frontend/.nvmrc`) and pnpm (for the frontend)
 - Docker (for Postgres and Testcontainers)

@@ -16,7 +16,7 @@ The repo root SHALL contain a `README.md` that names every top-level directory t
 #### Scenario: No empty placeholder directories
 - **WHEN** the repo is inspected
 - **THEN** only directories that contain real content exist at the top level
-- **AND** no empty `frontend/`, `e2e/`, or `infra/` directory has been pre-created.
+- **AND** no empty `e2e/` or `infra/` directory has been pre-created.
 
 ### Requirement: Repo-wide editor and VCS hygiene files exist
 
