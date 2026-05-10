@@ -15,7 +15,7 @@
 - [x] 2.1 Push the branch and open a pull request to trigger CI.
 - [x] 2.2 Confirm the `frontend` job's `pnpm/action-setup@v4` step succeeds (no "No pnpm version is specified" error).
 - [x] 2.3 Confirm the `frontend` job's install / test / build steps run and pass.
-- [ ] 2.4 Confirm the `backend` job (test + openapi drift check) passes against the Postgres service container.
+- [x] 2.4 Confirm the `backend` job (test + openapi drift check) passes against the Postgres service container.
 
 ## 3. Validate the proposal artifacts
 
