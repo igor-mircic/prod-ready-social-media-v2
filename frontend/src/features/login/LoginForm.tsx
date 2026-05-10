@@ -3,9 +3,13 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 
-import { ApiError } from '../../api/client'
-import { useLogin, me } from '../../api/generated/queries/auth-controller/auth-controller'
-import { LoginBody } from '../../api/generated/schemas/auth-controller/auth-controller.zod'
+import { ApiError } from '@/api/client'
+import { useLogin, me } from '@/api/generated/queries/auth-controller/auth-controller'
+import { LoginBody } from '@/api/generated/schemas/auth-controller/auth-controller.zod'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
 import { useAuth } from '../auth/AuthContext'
 
 type LoginFormValues = z.infer<typeof LoginBody>
@@ -53,26 +57,55 @@ export function LoginForm() {
       : null
 
   return (
-    <form onSubmit={onSubmit} noValidate>
-      <h2>Log in</h2>
+    <div className="flex min-h-svh items-center justify-center p-6">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>
+            <h2 className="m-0 text-base font-medium leading-snug">Log in</h2>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} noValidate>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="login-email">Email</FieldLabel>
+                <Input
+                  id="login-email"
+                  type="email"
+                  autoComplete="email"
+                  aria-invalid={errors.email ? true : undefined}
+                  {...register('email')}
+                />
+                <FieldError errors={errors.email ? [{ message: errors.email.message }] : []} />
+              </Field>
 
-      <label>
-        Email
-        <input type="email" autoComplete="email" {...register('email')} />
-      </label>
-      {errors.email && <p role="alert">{errors.email.message}</p>}
+              <Field>
+                <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                <Input
+                  id="login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  aria-invalid={errors.password ? true : undefined}
+                  {...register('password')}
+                />
+                <FieldError
+                  errors={errors.password ? [{ message: errors.password.message }] : []}
+                />
+              </Field>
 
-      <label>
-        Password
-        <input type="password" autoComplete="current-password" {...register('password')} />
-      </label>
-      {errors.password && <p role="alert">{errors.password.message}</p>}
+              <Button type="submit" disabled={isSubmitting || mutation.isPending}>
+                Log in
+              </Button>
 
-      <button type="submit" disabled={isSubmitting || mutation.isPending}>
-        Log in
-      </button>
-
-      {apiErrorMessage && <p role="alert">{apiErrorMessage}</p>}
-    </form>
+              {apiErrorMessage && (
+                <p role="alert" className="text-sm text-destructive">
+                  {apiErrorMessage}
+                </p>
+              )}
+            </FieldGroup>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   )
 }

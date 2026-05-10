@@ -1,4 +1,3 @@
-import './App.css'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { type ReactNode } from 'react'
 

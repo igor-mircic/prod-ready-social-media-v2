@@ -5,6 +5,24 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>frontend</title>
+    <script>
+      // Set the initial color theme before React hydrates to avoid a flash of
+      // the wrong palette, and keep it in sync with the OS preference if the
+      // user toggles it while the page is open. A user-facing toggle ships in
+      // a follow-up change.
+      (function () {
+        try {
+          var mq = window.matchMedia('(prefers-color-scheme: dark)')
+          var apply = function (matches) {
+            document.documentElement.classList.toggle('dark', matches)
+          }
+          apply(mq.matches)
+          mq.addEventListener('change', function (e) { apply(e.matches) })
+        } catch (_) {
+          /* matchMedia unavailable: stay on light */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>
