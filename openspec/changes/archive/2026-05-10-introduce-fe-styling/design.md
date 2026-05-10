@@ -87,18 +87,21 @@ Token categories in scope for this change:
 - **Light-only for now, add dark later** — every component would need an a11y/contrast audit a second time. Net more work.
 - **`media` strategy (CSS-only)** — respects OS preference but can't be user-overridden later without restructuring; the `class` strategy is a strict superset.
 
-### Decision 5: Proving ground = login + sessions screens, no new feature work
+### Decision 5: Proving ground = login + signup + home screens, no new feature work
 
-**Choice:** Restyle only the existing login form and active-session listing as part of this change. No new screens.
+**Choice:** Restyle only the existing login form, signup form, and the post-login `HomePage` as part of this change. No new screens.
+
+**Note on prior intent:** Earlier drafts of this change referenced an "active-session listing" screen. That screen does not exist in the repo today — the prior `add-login-and-sessions` change delivered sessions as a backend (Postgres) concern only, with no frontend listing UI. Building one now would require new backend endpoints and would violate the "no new feature work" guardrail. We instead use `HomePage` (the only authenticated surface) plus `SignupForm` (a near-clone of the login form) to exercise the same axes the original plan intended: form integration with `react-hook-form` + `zod`, button loading state, error states, and a non-form layout that consumes auth state.
 
 **Why:**
-- Small, well-bounded surface to exercise: a form (with `react-hook-form` + `zod`), error states, a button (loading state), a list/card layout, an empty state.
+- Small, well-bounded surface to exercise: two forms (with `react-hook-form` + `zod`), error states, buttons (loading state), and a logged-in layout.
 - Surfaces real integration friction (form library, validation messages, async state from `@tanstack/react-query`) without scope creep.
 - Anything broader risks the change ballooning and slipping past review.
 
 **Alternatives considered:**
 - **Build a sample page just to demo the system** — throwaway code, doesn't prove integration with the real stack we use.
 - **Restyle everything in the codebase** — there isn't much "everything" yet, but it still doubles the diff and review burden.
+- **Add a session-listing screen now** — contradicts "no new feature work" and pulls in backend changes; out of scope.
 
 ### Decision 6: Directory layout
 

@@ -1,5 +1,8 @@
-## ADDED Requirements
+# frontend-styling Specification
 
+## Purpose
+TBD - created by archiving change introduce-fe-styling. Update Purpose after archive.
+## Requirements
 ### Requirement: Tailwind CSS v4 is the styling primitive
 
 The `frontend/` project SHALL use Tailwind CSS v4 as its sole utility-CSS framework, wired into Vite via the official `@tailwindcss/vite` plugin. Tailwind utility classes SHALL be the primary mechanism for applying styles in feature components; hand-written CSS SHALL be limited to global concerns inside `frontend/src/index.css` (Tailwind imports, design tokens, dark-mode overrides, and base typography resets).
@@ -75,7 +78,7 @@ This change does NOT require a user-facing theme toggle UI; the toggle is left t
 
 ### Requirement: shadcn/ui primitives are owned in the repo
 
-The frontend SHALL host its reusable UI primitives (buttons, inputs, cards, labels, form helpers, etc.) as source files committed to `frontend/src/components/ui/`, generated via the shadcn CLI. shadcn SHALL NOT appear as a runtime npm dependency in `frontend/package.json`; only its supporting runtime helpers (`class-variance-authority`, `clsx`, `tailwind-merge`, `lucide-react`, and any `@radix-ui/*` packages required by generated components) appear as dependencies.
+The frontend SHALL host its reusable UI primitives (buttons, inputs, cards, labels, form helpers, etc.) as source files committed to `frontend/src/components/ui/`, generated via the shadcn CLI. shadcn SHALL NOT appear as a runtime npm dependency in `frontend/package.json`; only its supporting runtime helpers appear as dependencies — at minimum `class-variance-authority`, `clsx`, `tailwind-merge`, `lucide-react`, plus the Radix primitives required by the generated components (the `radix-ui` umbrella package emitted by the current shadcn registry, or individual `@radix-ui/react-*` packages on the older registry — either form is acceptable). Additional generator-emitted runtime helpers such as `tw-animate-css` and the configured icon/font packages MAY also appear.
 
 The shadcn CLI configuration SHALL live at `frontend/components.json` so subsequent `pnpm dlx shadcn@latest add <component>` invocations emit components into the agreed location with the agreed style.
 
@@ -124,7 +127,7 @@ The frontend SHALL configure the `@` path alias to resolve to `frontend/src/`, s
 
 ### Requirement: Proving-ground screens use the new styling system
 
-The existing **login** and **active-session listing** screens under `frontend/src/features/` SHALL be re-implemented to consume the new styling system: their visual elements MUST be composed from shadcn-generated primitives under `@/components/ui/` and styled via Tailwind utilities. After this change, neither feature SHALL apply colors, spacing, typography, or border radii via inline `style={...}` props or via bespoke CSS classes defined in `App.css`.
+The existing **login**, **signup**, and **home** screens under `frontend/src/features/` SHALL be re-implemented to consume the new styling system: their visual elements MUST be composed from shadcn-generated primitives under `@/components/ui/` and styled via Tailwind utilities. After this change, none of these features SHALL apply colors, spacing, typography, or border radii via inline `style={...}` props or via bespoke CSS classes defined in `App.css`.
 
 The change SHALL NOT alter the behavior of these screens — form validation rules, route paths, success/error flows, network calls, and the existing E2E test expectations remain unchanged.
 
@@ -134,13 +137,19 @@ The change SHALL NOT alter the behavior of these screens — form validation rul
 - **AND** the submit control is rendered via a `Button` primitive imported from `@/components/ui/`
 - **AND** field labels are rendered via a `Label` primitive imported from `@/components/ui/`.
 
-#### Scenario: Active-session listing renders from shadcn primitives
-- **WHEN** a reader inspects the session-listing feature components under `frontend/src/features/`
-- **THEN** the listing layout uses `Card` (or an equivalent shadcn primitive) imports from `@/components/ui/`
-- **AND** any action controls (e.g., revoke buttons) use the `Button` primitive.
+#### Scenario: Signup screen renders from shadcn primitives
+- **WHEN** a reader inspects the signup feature components under `frontend/src/features/`
+- **THEN** the form's input fields are rendered via an `Input` primitive imported from `@/components/ui/`
+- **AND** the submit control is rendered via a `Button` primitive imported from `@/components/ui/`
+- **AND** field labels are rendered via a `Label` primitive imported from `@/components/ui/`.
+
+#### Scenario: Home screen renders from shadcn primitives
+- **WHEN** a reader inspects the home feature components under `frontend/src/features/`
+- **THEN** the logout action is rendered via a `Button` primitive imported from `@/components/ui/`
+- **AND** the layout is composed using Tailwind utilities (and a `Card` container where it improves visual structure).
 
 #### Scenario: No legacy inline color/spacing styles remain on proving-ground screens
-- **WHEN** a reader inspects the login and session-listing feature components
+- **WHEN** a reader inspects the login, signup, and home feature components
 - **THEN** no element declares colors, padding, margin, font-size, or border-radius via inline `style` props
 - **AND** no element references CSS classes defined in `App.css`.
 
@@ -164,3 +173,4 @@ The pre-existing `frontend/src/App.css` file — which contained Vite-default bo
 #### Scenario: App.tsx does not import App.css
 - **WHEN** a reader opens `frontend/src/App.tsx`
 - **THEN** there is no `import "./App.css"` statement (or the import has been removed alongside the file).
+
