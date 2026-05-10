@@ -32,18 +32,3 @@ spring:
     url:
     username:
     password:
-
----
-# Profile used by `./gradlew generateOpenApiDocs`. Disables datasource/JPA/Flyway
-# autoconfig so the Spring context can boot headlessly without a running
-# Postgres just to dump the OpenAPI spec.
-spring:
-  config:
-    activate:
-      on-profile: codegen
-  autoconfigure:
-    exclude:
-      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
-      - org.springframework.boot.autoconfigure.orm.jpa.JpaRepositoriesAutoConfiguration
-      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
