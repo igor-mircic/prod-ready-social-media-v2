@@ -7,7 +7,7 @@ test('signup happy path creates an account that the API recognises', async ({
 }) => {
   const input = randomSignupInput()
 
-  await page.goto('/')
+  await page.goto('/signup')
   await expect(page.getByRole('heading', { name: 'Create account' })).toBeVisible()
 
   await page.getByLabel('Email').fill(input.email)

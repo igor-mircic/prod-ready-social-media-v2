@@ -13,7 +13,7 @@ test('signup form surfaces ProblemDetail.detail on duplicate email', async ({
   const expectedDetail = (duplicate.body as { detail?: string }).detail
   expect(expectedDetail, 'backend ProblemDetail.detail').toBeTruthy()
 
-  await page.goto('/')
+  await page.goto('/signup')
   await page.getByLabel('Email').fill(input.email)
   await page.getByLabel('Password').fill(input.password)
   await page.getByLabel('Display name').fill(input.displayName)

@@ -6,9 +6,15 @@
 //     the env var is set, it replaces the leading `/api/v1` of the generated
 //     URL — so the same generated code works against the Vite proxy in dev
 //     and against an absolute URL in other environments.
-//   - On any non-2xx response, parses the body as RFC 7807 ProblemDetail and
-//     throws a typed `ApiError`. TanStack Query's onError callbacks receive
-//     the typed error.
+//   - Attaches `Authorization: Bearer <token>` when the AuthContext has
+//     registered a token getter via `setAccessTokenGetter`.
+//   - On a 401 from any URL other than `/api/v1/auth/login` and
+//     `/api/v1/auth/refresh`, performs a single-flight refresh and retries
+//     the original request once. On refresh failure, fires the registered
+//     onRefreshFailure callback (used to clear AuthContext + navigate).
+//   - On any non-2xx response that is not a transient 401-then-refresh,
+//     parses the body as RFC 7807 ProblemDetail and throws a typed
+//     `ApiError`. TanStack Query's onError callbacks receive the typed error.
 
 const PROBLEM_DETAIL_KNOWN_FIELDS = new Set([
   'type',
@@ -53,6 +59,8 @@ export class ApiError extends Error {
 
 const DEFAULT_BASE_URL = '/api/v1'
 const SPEC_PREFIX = '/api/v1'
+const LOGIN_URL = '/api/v1/auth/login'
+const REFRESH_URL = '/api/v1/auth/refresh'
 
 function resolveBaseUrl(): string {
   const fromEnv = (import.meta as { env?: { VITE_API_BASE_URL?: string } }).env
@@ -72,13 +80,76 @@ function buildUrl(url: string): string {
   return `${base}${url.startsWith('/') ? url : `/${url}`}`
 }
 
-// Orval's `react-query` client expects the mutator to return an envelope of
-// the shape `{ data, status, headers }`. Returning the raw body would
-// produce wrong types in the generated hooks.
-export async function apiFetch<T = unknown>(
-  url: string,
-  init: RequestInit = {},
-): Promise<T> {
+let accessTokenGetter: (() => string | null) | null = null
+let refreshSuccessHandler: ((newToken: string) => void) | null = null
+let refreshFailureHandler: (() => void) | null = null
+let inflightRefresh: Promise<string | null> | null = null
+
+export function setAccessTokenGetter(getter: (() => string | null) | null): void {
+  accessTokenGetter = getter
+}
+
+export function setRefreshHandlers(
+  onSuccess: ((token: string) => void) | null,
+  onFailure: (() => void) | null,
+): void {
+  refreshSuccessHandler = onSuccess
+  refreshFailureHandler = onFailure
+}
+
+// Test seam: cancel any in-flight refresh between Vitest cases so handlers
+// from one test do not bleed into another.
+export function __resetClientState(): void {
+  accessTokenGetter = null
+  refreshSuccessHandler = null
+  refreshFailureHandler = null
+  inflightRefresh = null
+}
+
+function isAuthEndpoint(url: string): boolean {
+  return url.startsWith(LOGIN_URL) || url.startsWith(REFRESH_URL)
+}
+
+async function refreshOnce(): Promise<string | null> {
+  if (inflightRefresh) return inflightRefresh
+  inflightRefresh = (async () => {
+    try {
+      const response = await fetch(buildUrl(REFRESH_URL), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json, application/problem+json' },
+      })
+      if (!response.ok) {
+        refreshFailureHandler?.()
+        return null
+      }
+      const body = (await response.json()) as { accessToken?: string }
+      if (!body.accessToken) {
+        refreshFailureHandler?.()
+        return null
+      }
+      refreshSuccessHandler?.(body.accessToken)
+      return body.accessToken
+    } catch {
+      refreshFailureHandler?.()
+      return null
+    } finally {
+      // Release the in-flight slot on the next tick so queued awaiters all
+      // observe the same resolved value before a fresh refresh can begin.
+      setTimeout(() => {
+        inflightRefresh = null
+      }, 0)
+    }
+  })()
+  return inflightRefresh
+}
+
+function withAuthorization(headers: Headers, token: string | null): Headers {
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  return headers
+}
+
+async function performFetch(url: string, init: RequestInit): Promise<Response> {
   const headers = new Headers(init.headers ?? {})
   if (!headers.has('Accept')) {
     headers.set('Accept', 'application/json, application/problem+json')
@@ -86,8 +157,26 @@ export async function apiFetch<T = unknown>(
   if (init.body !== undefined && init.body !== null && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
+  const token = accessTokenGetter ? accessTokenGetter() : null
+  withAuthorization(headers, token)
+  return fetch(buildUrl(url), { ...init, headers, credentials: 'include' })
+}
 
-  const response = await fetch(buildUrl(url), { ...init, headers })
+// Orval's `react-query` client expects the mutator to return an envelope of
+// the shape `{ data, status, headers }`. Returning the raw body would
+// produce wrong types in the generated hooks.
+export async function apiFetch<T = unknown>(
+  url: string,
+  init: RequestInit = {},
+): Promise<T> {
+  let response = await performFetch(url, init)
+
+  if (response.status === 401 && !isAuthEndpoint(url)) {
+    const newToken = await refreshOnce()
+    if (newToken) {
+      response = await performFetch(url, init)
+    }
+  }
 
   if (!response.ok) {
     let problem: ProblemDetail = {}

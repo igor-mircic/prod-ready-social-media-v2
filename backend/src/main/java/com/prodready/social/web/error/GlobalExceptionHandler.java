@@ -1,6 +1,7 @@
 package com.prodready.social.web.error;
 
 import com.prodready.social.useraccounts.EmailAlreadyRegisteredException;
+import com.prodready.social.useraccounts.InvalidRefreshTokenException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,6 +11,9 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -42,12 +46,54 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         .body(body);
   }
 
+  static final String INVALID_CREDENTIALS_DETAIL = "Invalid email or password";
+
   @ExceptionHandler(EmailAlreadyRegisteredException.class)
   ResponseEntity<ProblemDetail> handleEmailAlreadyRegistered(EmailAlreadyRegisteredException ex) {
     ProblemDetail body = ProblemDetail.forStatus(HttpStatus.CONFLICT);
     body.setTitle("Email already registered");
     body.setDetail(ex.getMessage());
     return ResponseEntity.status(HttpStatus.CONFLICT)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(BadCredentialsException.class)
+  ResponseEntity<ProblemDetail> handleBadCredentials(BadCredentialsException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+    body.setTitle("Unauthorized");
+    body.setDetail(INVALID_CREDENTIALS_DETAIL);
+    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(InvalidRefreshTokenException.class)
+  ResponseEntity<ProblemDetail> handleInvalidRefresh(InvalidRefreshTokenException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+    body.setTitle("Unauthorized");
+    body.setDetail("Invalid refresh token");
+    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(AuthenticationException.class)
+  ResponseEntity<ProblemDetail> handleAuthentication(AuthenticationException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.UNAUTHORIZED);
+    body.setTitle("Unauthorized");
+    body.setDetail("Authentication required");
+    return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(AccessDeniedException.class)
+  ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.FORBIDDEN);
+    body.setTitle("Forbidden");
+    body.setDetail("Access denied");
+    return ResponseEntity.status(HttpStatus.FORBIDDEN)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(body);
   }
