@@ -46,6 +46,18 @@ Format enforcement uses Spotless + google-java-format:
 ./gradlew spotlessApply    # rewrite to match
 ```
 
+## OpenAPI
+
+Regenerate the OpenAPI spec snapshot at `<repo-root>/openapi/openapi.json`:
+
+```sh
+./gradlew generateOpenApiDocs --no-configuration-cache
+```
+
+The plugin boots the Spring context with the `codegen` profile (no datasource)
+and writes the spec headlessly. CI runs the same command and fails on drift —
+see [`../openapi/README.md`](../openapi/README.md) for the full policy.
+
 ## Layout
 
 - `src/main/java/com/prodready/social/` — application code; per-feature

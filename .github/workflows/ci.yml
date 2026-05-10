@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend (test + openapi drift)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run backend tests
+        working-directory: backend
+        run: ./gradlew test
+
+      - name: Generate OpenAPI spec
+        working-directory: backend
+        run: ./gradlew generateOpenApiDocs --no-configuration-cache
+
+      - name: Verify openapi.json is up to date
+        run: |
+          if ! git diff --exit-code -- openapi/openapi.json; then
+            echo "::error file=openapi/openapi.json::openapi/openapi.json is out of date."
+            echo "Run \`./gradlew generateOpenApiDocs --no-configuration-cache\` from backend/ and commit the result."
+            exit 1
+          fi
+
+  frontend:
+    name: frontend (gen + test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # `pnpm install` runs the `postinstall` script which executes `orval`
+      # and produces frontend/src/api/generated/. The generated TS is
+      # validated indirectly by `pnpm test` and `pnpm build` (typecheck).
+      - name: Install (with codegen via postinstall)
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        working-directory: frontend
+        run: pnpm test
+
+      - name: Build
+        working-directory: frontend
+        run: pnpm build
