@@ -51,15 +51,12 @@ spotless {
 	}
 }
 
-// Headless OpenAPI generation: `./gradlew generateOpenApiDocs` boots the
-// Spring context with the `codegen` profile (no datasource), hits
+// `./gradlew generateOpenApiDocs` boots the Spring context, hits
 // /v3/api-docs, writes the spec to <repo-root>/openapi/openapi.json, exits.
+// Requires a Postgres reachable at the default datasource URL.
 openApi {
 	apiDocsUrl.set("http://localhost:8080/v3/api-docs")
 	outputDir.set(file("$rootDir/../openapi"))
 	outputFileName.set("openapi.json")
 	waitTimeInSeconds.set(60)
-	customBootRun {
-		args.set(listOf("--spring.profiles.active=codegen"))
-	}
 }

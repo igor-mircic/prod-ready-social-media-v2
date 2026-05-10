@@ -49,16 +49,19 @@ The two prior scaffold changes (`scaffold-spring-backend` and `scaffold-frontend
 
 **Exception:** The pnpm pin location *is* called out in the spec, because it's the bug we just fixed and we want a future contributor not to regress it. This is a deliberate inversion of the rule — the spec says "pnpm version comes from `frontend/package.json`'s `packageManager` field", which is a strong claim about the workflow's wiring. The cost of the rigidity is small (this fact is unlikely to change), the benefit is preventing the exact recurrence the spec was written for.
 
-### D3. Adopt the existing workflow as-is; no scope creep
+### D3. Adopt the existing workflow as the implementation; bound the scope to "make it actually green"
 
-**Decision:** The implementation step is two-fold and bounded:
+**Decision:** The implementation work is bounded to:
 
-1. Apply the one-line fix to `.github/workflows/ci.yml` (the `package_json_file:` addition).
-2. Author `openspec/specs/ci/spec.md` (which lands when the change is archived/synced).
+1. The `package_json_file:` addition to the `pnpm/action-setup@v4` step (frontend fix; D1).
+2. The Postgres service container on the backend job + removal of the dead `codegen` profile from `application.yaml` and `customBootRun.args` from `build.gradle.kts` (backend fix; D5).
+3. Authoring `openspec/specs/ci/spec.md` (which lands when the change is archived/synced).
 
 No other CI work in this change. No new jobs, no concurrency settings, no `permissions:` block tightening, no `paths:` filters, no required-checks GitHub configuration.
 
-**Rationale:** Each of those is defensible on its own merits but each also has its own decision and its own surface area. Bundling them dilutes review and inflates the change. Keep this change tight: spec the existing workflow, fix the failing step, ship.
+**Rationale:** Each of those is defensible on its own merits but each also has its own decision and its own surface area. Bundling them dilutes review and inflates the change. Keep this change tight: spec the existing workflow, fix what's actually broken, ship.
+
+**Scope expansion vs. the original proposal.** The original proposal called for a single one-line fix and "no code changes in `backend/`". When the PR was opened, CI surfaced a second failure: the backend job's drift check had been red since `add-api-contract-codegen` merged (CI on `main` was already failing — see PR #2's run). The `codegen`-profile design intended to make the backend boot headlessly was non-functional in two ways (Spring Boot 4 module rename made the autoconfig-exclude FQNs no-ops, and even with corrected FQNs the controller beans still required JPA wiring). Rather than ship a spec whose drift-check requirement is aspirational, the change absorbs the backend fix. Without it the new `ci` capability would land knowingly broken on `main`.
 
 **Out-of-scope ideas explicitly noted as future changes:**
 
@@ -72,6 +75,20 @@ No other CI work in this change. No new jobs, no concurrency settings, no `permi
 **Decision:** The current drift check — regenerate `openapi.json` then `git diff --exit-code` — is locked into the spec verbatim in behavioral terms. The error message it prints today (telling the contributor to run `./gradlew generateOpenApiDocs --no-configuration-cache` from `backend/`) is also captured as a scenario, because the actionable message is the whole point of the check.
 
 **Rationale:** This check is the linchpin of the contract pipeline established in `add-api-contract-codegen`. If it ever silently disappears, the backend and frontend can drift across PRs and the bug surfaces only when a frontend developer runs `pnpm install` and codegen produces a different shape. The spec exists primarily to make this check tamper-evident.
+
+### D5. Backend headless-codegen is replaced with a Postgres service container
+
+**Decision:** The backend job in `.github/workflows/ci.yml` declares a `postgres:16` service container with `POSTGRES_DB/USER/PASSWORD=social/social/social` (matching the default `application.yaml` datasource URL `jdbc:postgresql://localhost:5432/social`) and a `pg_isready` healthcheck. The `springdoc-openapi-gradle-plugin` runs against this real DB: Flyway migrates, Spring fully wires, springdoc dumps `/v3/api-docs`, the diff is checked. The `codegen` profile in `application.yaml` and the `customBootRun { args.set(listOf("--spring.profiles.active=codegen")) }` block in `build.gradle.kts` are removed as dead code.
+
+**Alternatives considered:**
+
+- *Keep the `codegen` profile and fix it.* The Spring Boot 4 module rename meant the autoconfigure-exclude FQNs (`org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration` etc.) were silent no-ops. Fixing the FQNs to their Spring Boot 4 modular equivalents (`org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration` etc.) made the exclusions take effect, but exposed a deeper hole: `AuthController` → `SignupService` → `UserRepository` is an unconditional bean chain, and excluding `DataJpaRepositoriesAutoConfiguration` makes `UserRepository` unsatisfiable, so the context still failed to refresh. Patching every JPA-dependent application bean with `@Profile("!codegen")` would (a) keep growing as the app grows, and (b) produce an OpenAPI spec missing the very endpoints we want documented. Rejected.
+- *Mock/stub `UserRepository` (and future repositories) under the `codegen` profile.* Accepts an open-ended bean-stubbing burden in production code that exists only to keep CI happy. Rejected.
+- *Use `spring-boot-docker-compose` to auto-start a Postgres for `bootRun`.* Equivalent at the runtime level but mixes concerns: the dev-loop convenience tool would now also be the CI mechanism, and `bootRun` would silently spin up containers in unrelated tasks. The GitHub Actions service-container is the idiomatic place to express "CI needs a database". Rejected for CI use; could be revisited for the dev loop later.
+
+**Rationale:** The springdoc plugin's design assumes a live, fully-wired Spring context — that's how it discovers controllers and their schemas. Trying to make the production app boot without the production DB is a fight against the framework. A service container costs ~5s of pull/start on a cache miss, removes the entire class of "this autoconfig was renamed" failure modes, and lets the spec describe what CI actually does instead of what we wished it did. The `codegen` profile becomes dead code with no caller; deleting it is simple bookkeeping.
+
+**Trade-off accepted:** D3 originally framed this change as "no new tooling on CI". A Postgres service container is new tooling. Accepted because the alternative is a spec that knowingly doesn't match `main`. The proposal's Impact section is updated accordingly.
 
 ## Risks / Trade-offs
 
