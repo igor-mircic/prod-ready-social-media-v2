@@ -24,5 +24,5 @@
 
 ## 4. Archive
 
-- [ ] 4.1 Once the PR is reviewed and CI is green, archive the change (`openspec archive introduce-ci-pipeline`), which creates `openspec/specs/ci/spec.md` from the delta and moves the change folder under `openspec/changes/archive/`.
-- [ ] 4.2 Update `openspec/specs/ci/spec.md`'s `## Purpose` line from the post-archive `TBD` placeholder to a one-line description of the `ci` capability (matching the convention used by the other capabilities in `openspec/specs/`).
+- [x] 4.1 Once the PR is reviewed and CI is green, archive the change (`openspec archive introduce-ci-pipeline`), which creates `openspec/specs/ci/spec.md` from the delta and moves the change folder under `openspec/changes/archive/`.
+- [x] 4.2 Update `openspec/specs/ci/spec.md`'s `## Purpose` line from the post-archive `TBD` placeholder to a one-line description of the `ci` capability (matching the convention used by the other capabilities in `openspec/specs/`).
