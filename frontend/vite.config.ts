@@ -2,17 +2,22 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const backendProxy = {
+  '/actuator': 'http://localhost:8080',
+  '/api/v1': {
+    target: 'http://localhost:8080',
+    changeOrigin: true,
+  },
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: {
-      '/actuator': 'http://localhost:8080',
-      '/api/v1': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-      },
-    },
+    proxy: backendProxy,
+  },
+  preview: {
+    proxy: backendProxy,
   },
   test: {
     environment: 'jsdom',
