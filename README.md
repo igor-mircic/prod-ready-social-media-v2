@@ -31,6 +31,23 @@ See `backend/README.md` for backend-specific run and test instructions,
 `frontend/README.md` for the frontend dev loop, and `e2e/README.md` for the
 Playwright end-to-end harness.
 
+## Logging in locally
+
+Once Postgres, the backend, and the frontend dev server are running:
+
+1. Visit `http://localhost:5173/signup` and create an account (`POST /api/v1/auth/signup`).
+2. Visit `http://localhost:5173/login` and sign in with the same email/password
+   (`POST /api/v1/auth/login`). The response sets a refresh-token `HttpOnly` cookie
+   scoped to `/api/v1/auth/refresh`; the access token lives in memory only.
+3. The SPA lands on `/home`, which calls `GET /api/v1/auth/me` to render the
+   current user, and offers a Logout button (`POST /api/v1/auth/logout`).
+
+Default token TTLs (overridable via `app.auth.access-token-ttl` and
+`app.auth.refresh-token-ttl` in `application.yaml`):
+
+- access token: 15 minutes (`PT15M`)
+- refresh token: 30 days (`P30D`)
+
 ## Prerequisites
 
 - Java 21

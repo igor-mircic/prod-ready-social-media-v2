@@ -19,9 +19,8 @@ public class User {
   @Column(nullable = false, unique = true)
   private String email;
 
-  // Deliberately no public getter — the hash should never leak through entity
-  // accessors into logs/responses. The signup flow writes it via the
-  // package-private setter and persistence reads it via reflection.
+  // Package-private getter only — the hash must never leak through entity
+  // accessors into logs/responses. LoginService reads it for verification.
   @Column(name = "password_hash", nullable = false)
   private String passwordHash;
 
@@ -52,6 +51,12 @@ public class User {
 
   public String getDisplayName() {
     return displayName;
+  }
+
+  // Package-private: exposed only to LoginService for password verification.
+  // Never expose this to web layers — there is no public getter on purpose.
+  String getPasswordHash() {
+    return passwordHash;
   }
 
   public OffsetDateTime getCreatedAt() {
