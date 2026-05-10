@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Orval-generated TypeScript (regenerated on `pnpm install` via postinstall,
+# or on demand via `pnpm gen:api`). The durable artifact is `openapi/openapi.json`.
+src/api/generated/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
