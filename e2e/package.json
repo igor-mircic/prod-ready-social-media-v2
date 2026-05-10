@@ -1,0 +1,23 @@
+{
+  "name": "e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "gen:api": "orval",
+    "postinstall": "orval"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^24.12.2",
+    "orval": "^8.9.1",
+    "testcontainers": "^11.0.0",
+    "typescript": "~6.0.2"
+  }
+}

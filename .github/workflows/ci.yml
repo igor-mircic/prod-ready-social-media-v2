@@ -50,6 +50,18 @@ jobs:
             exit 1
           fi
 
+      - name: Build backend JAR
+        working-directory: backend
+        run: ./gradlew bootJar
+
+      - name: Upload backend JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: backend/build/libs/*.jar
+          if-no-files-found: error
+          retention-days: 1
+
   frontend:
     name: frontend (gen + test + build)
     runs-on: ubuntu-latest
@@ -81,3 +93,77 @@ jobs:
       - name: Build
         working-directory: frontend
         run: pnpm build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  e2e:
+    name: e2e (${{ matrix.browser }})
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: e2e/package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: e2e/pnpm-lock.yaml
+
+      - name: Download backend JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-jar
+          path: backend/build/libs
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Install frontend runtime deps for vite preview
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Install e2e deps (with codegen via postinstall)
+        working-directory: e2e
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser (${{ matrix.browser }})
+        working-directory: e2e
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Run Playwright (${{ matrix.browser }})
+        working-directory: e2e
+        run: pnpm exec playwright test --project=${{ matrix.browser }}
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 7
