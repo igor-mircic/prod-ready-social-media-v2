@@ -3,5 +3,6 @@
 
 import { setupServer } from 'msw/node'
 import { getAuthControllerMock } from '../api/generated/msw/auth-controller/auth-controller.msw'
+import { getPostsControllerMock } from '../api/generated/msw/posts-controller/posts-controller.msw'
 
-export const server = setupServer(...getAuthControllerMock())
+export const server = setupServer(...getAuthControllerMock(), ...getPostsControllerMock())

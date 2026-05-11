@@ -4,6 +4,8 @@ import { useLogout, useMe } from '@/api/generated/queries/auth-controller/auth-c
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '../auth/AuthContext'
+import { PostComposer } from '../posts/PostComposer'
+import { PostList } from '../posts/PostList'
 
 export function HomePage() {
   const navigate = useNavigate()
@@ -54,28 +56,33 @@ export function HomePage() {
   }
 
   const user = meQuery.data.data
+  const userId = user.id ?? ''
 
   return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>
-            <h1 className="m-0 text-lg font-medium leading-snug">
-              Hello, {user.displayName}
-            </h1>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => logoutMutation.mutate()}
-            disabled={logoutMutation.isPending}
-          >
-            Log out
-          </Button>
-        </CardContent>
-      </Card>
+    <div className="flex min-h-svh justify-center p-6">
+      <div className="flex w-full max-w-xl flex-col gap-6">
+        <Card className="w-full">
+          <CardHeader>
+            <CardTitle>
+              <h1 className="m-0 text-lg font-medium leading-snug">
+                Hello, {user.displayName}
+              </h1>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => logoutMutation.mutate()}
+              disabled={logoutMutation.isPending}
+            >
+              Log out
+            </Button>
+          </CardContent>
+        </Card>
+        <PostComposer authorUserId={userId} />
+        <PostList userId={userId} />
+      </div>
     </div>
   )
 }
