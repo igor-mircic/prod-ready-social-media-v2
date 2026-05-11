@@ -1,5 +1,9 @@
 package com.prodready.social.web.error;
 
+import com.prodready.social.posts.AuthorNotFoundException;
+import com.prodready.social.posts.InvalidCursorException;
+import com.prodready.social.posts.PostAuthorMismatchException;
+import com.prodready.social.posts.PostNotFoundException;
 import com.prodready.social.useraccounts.EmailAlreadyRegisteredException;
 import com.prodready.social.useraccounts.InvalidRefreshTokenException;
 import java.util.LinkedHashMap;
@@ -94,6 +98,39 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     body.setTitle("Forbidden");
     body.setDetail("Access denied");
     return ResponseEntity.status(HttpStatus.FORBIDDEN)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler({PostNotFoundException.class, PostAuthorMismatchException.class})
+  ResponseEntity<ProblemDetail> handlePostNotFound(RuntimeException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+    body.setTitle("Not Found");
+    body.setDetail("Post not found");
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(AuthorNotFoundException.class)
+  ResponseEntity<ProblemDetail> handleAuthorNotFound(AuthorNotFoundException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.NOT_FOUND);
+    body.setTitle("Not Found");
+    body.setDetail("Author not found");
+    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(InvalidCursorException.class)
+  ResponseEntity<ProblemDetail> handleInvalidCursor(InvalidCursorException ex) {
+    Map<String, List<String>> fields = new LinkedHashMap<>();
+    fields.put("cursor", List.of("invalid"));
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+    body.setTitle("Validation failed");
+    body.setDetail("Invalid cursor");
+    body.setProperty("fields", fields);
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(body);
   }

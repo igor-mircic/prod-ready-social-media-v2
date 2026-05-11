@@ -1,0 +1,122 @@
+package com.prodready.social.posts;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Testcontainers
+class ReadPostIT {
+
+  @Container
+  static final PostgreSQLContainer POSTGRES =
+      new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"));
+
+  @DynamicPropertySource
+  static void datasourceProperties(DynamicPropertyRegistry registry) {
+    registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+    registry.add("spring.datasource.username", POSTGRES::getUsername);
+    registry.add("spring.datasource.password", POSTGRES::getPassword);
+  }
+
+  @Autowired MockMvc mvc;
+  @Autowired JdbcTemplate jdbc;
+  final ObjectMapper mapper = new ObjectMapper();
+
+  @BeforeEach
+  void cleanDatabase() {
+    jdbc.update("DELETE FROM posts");
+    jdbc.update("DELETE FROM auth_refresh_tokens");
+    jdbc.update("DELETE FROM auth_access_tokens");
+    jdbc.update("DELETE FROM users");
+  }
+
+  private UUID createPost(PostsITSupport.TestUser user, String body) throws Exception {
+    String response =
+        mvc.perform(
+                post("/api/v1/posts")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + user.accessToken())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(PostsITSupport.createPostBody(body)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    JsonNode parsed = mapper.readTree(response);
+    return UUID.fromString(parsed.get("id").asText());
+  }
+
+  @Test
+  void read_happyPath_returnsPostWithAuthorSummary() throws Exception {
+    PostsITSupport.TestUser alice =
+        PostsITSupport.signupAndLogin(mvc, "alice@example.com", "correcthorse", "Alice");
+    UUID id = createPost(alice, "first post");
+
+    mvc.perform(
+            get("/api/v1/posts/" + id)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
+        .andExpect(status().isOk())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+        .andExpect(jsonPath("$.id").value(id.toString()))
+        .andExpect(jsonPath("$.body").value("first post"))
+        .andExpect(jsonPath("$.author.id").value(alice.id().toString()))
+        .andExpect(jsonPath("$.author.displayName").value("Alice"))
+        .andExpect(jsonPath("$.createdAt").exists());
+  }
+
+  @Test
+  void read_unknownId_returns404() throws Exception {
+    PostsITSupport.TestUser alice =
+        PostsITSupport.signupAndLogin(mvc, "alice@example.com", "correcthorse", "Alice");
+
+    mvc.perform(
+            get("/api/v1/posts/" + UUID.randomUUID())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
+        .andExpect(status().isNotFound())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+  }
+
+  @Test
+  void read_softDeletedPost_returns404() throws Exception {
+    PostsITSupport.TestUser alice =
+        PostsITSupport.signupAndLogin(mvc, "alice@example.com", "correcthorse", "Alice");
+    UUID id = createPost(alice, "to be deleted");
+    jdbc.update("UPDATE posts SET deleted_at = now() WHERE id = ?", id);
+
+    mvc.perform(
+            get("/api/v1/posts/" + id)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void read_unauthenticated_returns401() throws Exception {
+    mvc.perform(get("/api/v1/posts/" + UUID.randomUUID()))
+        .andExpect(status().isUnauthorized())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+  }
+}

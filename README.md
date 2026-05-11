@@ -48,6 +48,24 @@ Default token TTLs (overridable via `app.auth.access-token-ttl` and
 - access token: 15 minutes (`PT15M`)
 - refresh token: 30 days (`P30D`)
 
+## Posting locally
+
+After logging in (see above), the `/home` page also renders the posts feature
+for the signed-in user:
+
+1. A "New post" composer accepts a non-empty body up to 500 characters. The
+   `Post` button stays disabled while the body is empty or whitespace-only.
+2. Submitting posts to `POST /api/v1/posts`. On success the list below the
+   composer refetches and the new post appears at the top.
+3. The list is cursor-paginated (`GET /api/v1/users/{userId}/posts`). When the
+   server returns a `nextCursor`, a "Load more" button fetches the next page.
+4. Each post you authored renders a Delete control that soft-deletes the post
+   via `DELETE /api/v1/posts/{id}` and refetches the list.
+
+The per-endpoint contract lives in `openapi/openapi.json`; the generated
+TanStack Query hooks under `frontend/src/api/generated/queries/posts-controller/`
+are the source of truth for how the SPA calls those endpoints.
+
 ## Prerequisites
 
 - Java 21
