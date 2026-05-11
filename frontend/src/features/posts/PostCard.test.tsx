@@ -25,6 +25,7 @@ function AuthSeeder({
   const auth = useAuth()
   const [seeded, setSeeded] = useState(false)
   useEffect(() => {
+    if (auth.booting) return
     auth.login('test-token', {
       id: userId,
       email: 'test@example.com',
@@ -33,7 +34,7 @@ function AuthSeeder({
     })
     setSeeded(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, displayName])
+  }, [userId, displayName, auth.booting])
   if (!seeded) return null
   return <>{children}</>
 }
@@ -135,7 +136,7 @@ test('does NOT render the delete control when the post is not the caller’s', a
   expect(screen.queryByRole('button', { name: /delete post/i })).toBeNull()
 })
 
-test('directly-rendered PostCard hides the delete control for non-author', () => {
+test('directly-rendered PostCard hides the delete control for non-author', async () => {
   renderWithCurrentUser(
     BOB_ID,
     <PostCard
@@ -149,6 +150,6 @@ test('directly-rendered PostCard hides the delete control for non-author', () =>
     />,
     'Bob',
   )
-  expect(screen.getByText('standalone card')).toBeTruthy()
+  await waitFor(() => expect(screen.getByText('standalone card')).toBeTruthy())
   expect(screen.queryByRole('button', { name: /delete post/i })).toBeNull()
 })

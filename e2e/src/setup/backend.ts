@@ -75,6 +75,10 @@ export async function startBackend(config: BackendConfig): Promise<BackendHandle
         SPRING_DATASOURCE_URL: jdbcUrl,
         SPRING_DATASOURCE_USERNAME: config.postgresUsername,
         SPRING_DATASOURCE_PASSWORD: config.postgresPassword,
+        // E2E runs over plain HTTP. WebKit/Safari refuses to send `Secure`
+        // cookies over HTTP even to 127.0.0.1, which would break the
+        // boot-time refresh flow under WebKit.
+        APP_AUTH_REFRESH_COOKIE_SECURE: 'false',
       },
     },
   )

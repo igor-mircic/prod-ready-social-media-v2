@@ -218,7 +218,7 @@ public class AuthController {
   private ResponseCookie buildRefreshCookie(String plaintext) {
     return ResponseCookie.from(REFRESH_COOKIE_NAME, plaintext)
         .httpOnly(true)
-        .secure(true)
+        .secure(tokenProperties.refreshCookieSecure())
         .sameSite("Lax")
         .path(REFRESH_COOKIE_PATH)
         .maxAge(tokenProperties.refreshTokenTtl())
@@ -228,7 +228,7 @@ public class AuthController {
   private ResponseCookie buildClearingRefreshCookie() {
     return ResponseCookie.from(REFRESH_COOKIE_NAME, "")
         .httpOnly(true)
-        .secure(true)
+        .secure(tokenProperties.refreshCookieSecure())
         .sameSite("Lax")
         .path(REFRESH_COOKIE_PATH)
         .maxAge(0)
