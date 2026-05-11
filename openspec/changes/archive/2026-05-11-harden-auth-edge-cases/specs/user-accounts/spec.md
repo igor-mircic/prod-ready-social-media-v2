@@ -169,6 +169,45 @@ The exploratory probe file `e2e/tests/auth-edge-probes.spec.ts` SHALL be deleted
 
 ## MODIFIED Requirements
 
+### Requirement: Refresh cookie has hardened attributes
+
+The backend SHALL set the `refresh_token` cookie with the following attributes on every issuing response (login and refresh): `HttpOnly`, `SameSite=Lax`, `Path=/api/v1/auth/refresh`, and `Max-Age` equal to the configured refresh-token TTL in seconds. The `Secure` attribute SHALL be read from `app.auth.refresh-cookie-secure` (defaulting to `true`), allowing it to be turned off in HTTP-only test environments where browsers (notably WebKit) refuse to send `Secure` cookies over `http://127.0.0.1`. Production deployments SHALL leave the default `true` so the cookie is only sent over HTTPS.
+
+#### Scenario: Cookie attributes are present in production defaults
+
+- **WHEN** a reader inspects any `Set-Cookie: refresh_token=…` header issued by login or refresh against a backend started with default properties
+- **THEN** the header includes `HttpOnly`
+- **AND** includes `Secure`
+- **AND** includes `SameSite=Lax`
+- **AND** includes `Path=/api/v1/auth/refresh`
+- **AND** includes `Max-Age=<seconds matching app.auth.refresh-token-ttl>`.
+
+#### Scenario: Secure attribute can be disabled for HTTP test harnesses
+
+- **WHEN** the backend is started with `app.auth.refresh-cookie-secure=false`
+- **THEN** the `Set-Cookie: refresh_token=…` header omits the `Secure` attribute
+- **AND** all other attributes (`HttpOnly`, `SameSite=Lax`, `Path`, `Max-Age`) are unchanged.
+
+### Requirement: CSRF protection is disabled across the API
+
+The backend SHALL disable Spring Security's CSRF protection for all endpoints. Cross-site forgery of `POST /api/v1/auth/refresh` is prevented by the refresh cookie's `SameSite=Lax` + `HttpOnly` + `Secure` attributes (a cross-site context cannot carry the cookie); all other state-changing endpoints authenticate via a `Authorization: Bearer <token>` header backed by a JS-memory access token, which a cross-site context cannot read or attach. A CSRF token round-trip therefore adds no protection over the existing design.
+
+#### Scenario: Refresh succeeds without a CSRF token
+
+- **WHEN** a client posts to `POST /api/v1/auth/refresh` with a valid `refresh_token` cookie and no `X-XSRF-TOKEN` header
+- **THEN** the request reaches the controller (no CSRF rejection)
+- **AND** the response status is 200 on the happy path.
+
+#### Scenario: Bearer-authenticated endpoints accept requests without CSRF tokens
+
+- **WHEN** a client calls a Bearer-authenticated endpoint with a valid `Authorization` header and no `X-XSRF-TOKEN` header
+- **THEN** the request is processed normally (no CSRF rejection).
+
+#### Scenario: CSRF is disabled in the security configuration
+
+- **WHEN** a reader inspects `SecurityConfig.java`
+- **THEN** the `HttpSecurity` builder calls `csrf(AbstractHttpConfigurer::disable)`.
+
 ### Requirement: Frontend AuthContext holds the access token in memory only
 
 The `frontend/` project SHALL include a React context at `frontend/src/features/auth/AuthContext.tsx` that holds `{accessToken, user}` in memory only — it SHALL NOT read from or write to `localStorage`, `sessionStorage`, or any cookie that JavaScript can read. On `AuthProvider` mount the context SHALL attempt boot-time hydration via a single `POST /api/v1/auth/refresh` followed (on success) by `GET /api/v1/auth/me`; until that flow settles, the context SHALL expose a `booting: true` flag.

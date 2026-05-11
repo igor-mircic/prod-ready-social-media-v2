@@ -58,7 +58,17 @@ The component shows a plain "Not found" heading and a link back to `/`. `RootRed
 
 `auth.session.spec.ts`, `auth.errors.spec.ts`, `auth.routing.spec.ts`, `signup.continue.spec.ts`, `not-found.spec.ts`. Bug IDs (B1, B6 …) are an artifact of the discovery process and don't belong in a permanent file name. The throwaway `auth-edge-probes.spec.ts` is deleted in the same commit that lands the formal files.
 
-### D7. Frontend unit test for boot-time hydration uses MSW, not Playwright
+### D7. Drop CSRF requirement on `/refresh` (backend change)
+
+The previous backend `SecurityConfig` required a CSRF token on `POST /api/v1/auth/refresh`. The frontend never sent one, so every refresh attempt from a real browser would have returned `403` — but no existing e2e test ever exercised the refresh path, and the backend integration tests use `SecurityMockMvcRequestPostProcessors.csrf()` to inject tokens that no production client has. The boot-time refresh introduced by this change immediately surfaced the gap.
+
+The frontend-only workaround would require a primer GET to load Spring's deferred CSRF cookie, then a POST with `X-XSRF-TOKEN`, plus a one-time 403-then-retry on first visit. That is more code and one extra round-trip on every page load for no additional security: the refresh cookie is `HttpOnly` + `SameSite=Lax` + `Secure`, so a cross-site context cannot carry it, and every other state-changing endpoint authenticates via a Bearer access token held in JS memory — which a cross-site context also cannot read or attach.
+
+We disable CSRF entirely in `SecurityConfig.java` (`http.csrf(AbstractHttpConfigurer::disable)`). The existing backend integration tests continue to pass because `.with(csrf())` is a no-op when CSRF is disabled.
+
+**Alternative considered:** keep CSRF and implement the primer/retry flow on the frontend. Rejected — same security posture, more code, more latency, and the deferred-CSRF semantics in Spring 6 make first-visit reliability fragile.
+
+### D8. Frontend unit test for boot-time hydration uses MSW, not Playwright
 
 `AuthContext.test.tsx` overrides the generated MSW handlers for `/auth/refresh` and `/auth/me` to assert: (a) refresh-200 + me-200 → `currentUser` set, `booting` false; (b) refresh-401 → `currentUser` null, `booting` false; (c) `booting` is `true` during the in-flight window. Faster feedback than e2e and matches the existing test pattern for the refresh interceptor.
 

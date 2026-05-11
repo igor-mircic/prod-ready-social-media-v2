@@ -110,7 +110,7 @@ function isAuthEndpoint(url: string): boolean {
   return url.startsWith(LOGIN_URL) || url.startsWith(REFRESH_URL)
 }
 
-async function refreshOnce(): Promise<string | null> {
+export async function refreshOnce(): Promise<string | null> {
   if (inflightRefresh) return inflightRefresh
   inflightRefresh = (async () => {
     try {
@@ -134,11 +134,12 @@ async function refreshOnce(): Promise<string | null> {
       refreshFailureHandler?.()
       return null
     } finally {
-      // Release the in-flight slot on the next tick so queued awaiters all
-      // observe the same resolved value before a fresh refresh can begin.
-      setTimeout(() => {
-        inflightRefresh = null
-      }, 0)
+      // Release the in-flight slot synchronously. Already-queued awaiters
+      // continue to observe the resolved promise's value (they hold their
+      // own reference); a fresh refresh fired after this one resolves can
+      // start immediately, which matters for the boot-time → runtime
+      // handover where the boot caller registered no failure handler.
+      inflightRefresh = null
     }
   })()
   return inflightRefresh

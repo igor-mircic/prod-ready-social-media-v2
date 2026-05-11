@@ -4,7 +4,8 @@ import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "app.auth")
-public record AuthTokenProperties(Duration accessTokenTtl, Duration refreshTokenTtl) {
+public record AuthTokenProperties(
+    Duration accessTokenTtl, Duration refreshTokenTtl, Boolean refreshCookieSecure) {
 
   public AuthTokenProperties {
     if (accessTokenTtl == null) {
@@ -12,6 +13,9 @@ public record AuthTokenProperties(Duration accessTokenTtl, Duration refreshToken
     }
     if (refreshTokenTtl == null) {
       refreshTokenTtl = Duration.ofDays(30);
+    }
+    if (refreshCookieSecure == null) {
+      refreshCookieSecure = Boolean.TRUE;
     }
   }
 }

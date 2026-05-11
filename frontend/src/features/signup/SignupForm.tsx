@@ -1,5 +1,6 @@
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
@@ -38,10 +39,16 @@ export function SignupForm() {
               <h2 className="m-0 text-base font-medium leading-snug">Account created</h2>
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-3">
             <section aria-live="polite">
               <p className="text-sm text-muted-foreground">Welcome, {created.displayName}.</p>
             </section>
+            <Link
+              to="/login"
+              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Continue to log in
+            </Link>
           </CardContent>
         </Card>
       </div>

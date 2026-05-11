@@ -142,6 +142,12 @@ test('refresh failure clears auth context and navigates to /login', async () => 
   function CallAndExpose({ onDone }: { onDone: () => void }) {
     const auth = useAuth()
     useEffect(() => {
+      // Wait for boot-time hydration to settle before exercising the
+      // runtime 401 → /refresh-failure path; otherwise the runtime refresh
+      // shares the in-flight slot with the boot-time refresh, whose
+      // failure handler is intentionally null (so /signup users with no
+      // refresh cookie aren't bounced to /login).
+      if (auth.booting) return
       auth.login('old-token', {
         id: 'u1',
         email: 'a@b.c',
@@ -152,7 +158,7 @@ test('refresh failure clears auth context and navigates to /login', async () => 
         .catch(() => {})
         .finally(onDone)
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [auth.booting])
     return <p>user={auth.currentUser?.displayName ?? 'none'}</p>
   }
 

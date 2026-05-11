@@ -8,7 +8,6 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
-import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 
 @Configuration
@@ -22,8 +21,6 @@ public class SecurityConfig {
     "/actuator/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui", "/swagger-ui/**", "/favicon.ico"
   };
 
-  static final String REFRESH_PATH = "/api/v1/auth/refresh";
-
   @Bean
   public SecurityFilterChain securityFilterChain(
       HttpSecurity http,
@@ -35,10 +32,13 @@ public class SecurityConfig {
         new BearerTokenAuthenticationFilter(authTokenService, userRepository);
     PathPatternRequestMatcher.Builder mvc = PathPatternRequestMatcher.withDefaults();
 
-    http.csrf(
-            csrf ->
-                csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-                    .requireCsrfProtectionMatcher(mvc.matcher(HttpMethod.POST, REFRESH_PATH)))
+    // CSRF protection is disabled. The refresh-token cookie is HttpOnly,
+    // SameSite=Lax, and Secure — a cross-site forgery cannot carry it. All
+    // other state-changing endpoints authenticate via a Bearer access token
+    // held in JS memory, which a cross-site context cannot read or attach.
+    // A CSRF token round-trip on /refresh adds no protection over the
+    // existing cookie attributes for this design.
+    http.csrf(AbstractHttpConfigurer::disable)
         .cors(AbstractHttpConfigurer::disable)
         .formLogin(AbstractHttpConfigurer::disable)
         .httpBasic(AbstractHttpConfigurer::disable)
