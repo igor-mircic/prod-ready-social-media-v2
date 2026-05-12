@@ -62,9 +62,15 @@ test.describe('UI vertical', () => {
     await expect(page.getByText('alice-1')).toBeVisible()
     await expect(page.getByText('alice-2')).toBeVisible()
 
-    // Alice posts a new third post via the API.
+    // Alice posts a new third post via the API. Re-login first — the harness
+    // sets APP_AUTH_ACCESS_TOKEN_TTL=PT2S so by this point in the test the
+    // original aliceToken has almost certainly lapsed under CI timing.
     await new Promise((r) => setTimeout(r, 3))
-    const fresh = await apiClient.createPost(aliceToken, {
+    const { accessToken: aliceFreshToken } = await loginViaApi(apiClient, {
+      email: aliceInput.email,
+      password: aliceInput.password,
+    })
+    const fresh = await apiClient.createPost(aliceFreshToken, {
       body: 'alice-fresh',
     })
     expect(fresh.status).toBe(201)
