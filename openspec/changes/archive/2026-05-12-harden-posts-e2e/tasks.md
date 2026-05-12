@@ -42,8 +42,8 @@
 
 - [x] 7.1 Run `pnpm --filter e2e exec playwright test posts.composer.hardening.spec.ts posts.pagination.deep.spec.ts posts.cross-user.pagination.spec.ts axe.routes.spec.ts` locally. Fix any flakes; keep the suite deterministic.
 - [x] 7.2 Run `openspec validate harden-posts-e2e --strict` and resolve any reported issues.
-- [ ] 7.3 Open the PR with the proposal/design/specs/tasks files staged alongside the e2e test additions and helper extensions. Match the title/body convention of PR #12 (`Implement and archive prove-posts-pagination-e2e`).
+- [x] 7.3 Open the PR with the proposal/design/specs/tasks files staged alongside the e2e test additions and helper extensions. Match the title/body convention of PR #12 (`Implement and archive prove-posts-pagination-e2e`).
 
 ## 8. Archive
 
-- [ ] 8.1 After merge, run the archive flow (`openspec-archive-change`) to fold the seven new scenarios into `openspec/specs/posts/spec.md` and move this change to `openspec/changes/archive/`.
+- [x] 8.1 After merge, run the archive flow (`openspec-archive-change`) to fold the seven new scenarios into `openspec/specs/posts/spec.md` and move this change to `openspec/changes/archive/`.
