@@ -42,20 +42,51 @@ test('axe scans clean across /login, /signup, /home, and /users/:userId', async 
   await runAxeScan(page, testInfo)
 
   await page.goto(`/users/${aliceId}`)
-  await expect(page.getByRole('heading', { name: aliceInput.displayName })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: aliceInput.displayName }),
+  ).toBeVisible()
   await expect(
     page.getByRole('article', { name: 'Post' }).filter({ hasText: seedBody }),
   ).toBeVisible()
   await runAxeScan(page, testInfo)
+
+  // Seed a follow relationship so the /users/:userId scan covers the
+  // rendered counts and the followed-state toggle button.
+  const bobInput = randomSignupInput({ displayName: 'Bob' })
+  await signupViaApi(apiClient, bobInput)
+  const { accessToken: bobToken } = await loginViaApi(apiClient, {
+    email: bobInput.email,
+    password: bobInput.password,
+  })
+  const followRes = await apiClient.follow(bobToken, aliceId!)
+  expect(followRes.status).toBe(204)
+
+  // Log Alice out so Bob can log in to view Alice's profile as a follower.
+  await page.goto('/home')
+  await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible()
+  await loginAndLandOnHome(page, bobInput)
+  await page.goto(`/users/${aliceId}`)
+  await expect(
+    page.getByRole('heading', { name: aliceInput.displayName }),
+  ).toBeVisible()
+  await expect(page.getByText(/1 follower\b/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Unfollow' })).toBeVisible()
+  await runAxeScan(page, testInfo)
 })
 
-test('axe scans clean on /not-found (unauthenticated)', async ({ page }, testInfo) => {
+test('axe scans clean on /not-found (unauthenticated)', async ({
+  page,
+}, testInfo) => {
   await page.goto('/this-does-not-exist')
   await expect(page.getByText(/not found|404/i).first()).toBeVisible()
   await runAxeScan(page, testInfo)
 })
 
-test('axe scans clean on /not-found (authenticated)', async ({ page, apiClient }, testInfo) => {
+test('axe scans clean on /not-found (authenticated)', async ({
+  page,
+  apiClient,
+}, testInfo) => {
   const input = randomSignupInput()
   await signupViaApi(apiClient, input)
   await loginAndLandOnHome(page, input)
