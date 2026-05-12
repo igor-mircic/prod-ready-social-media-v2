@@ -12,6 +12,7 @@ import type {
   CreatePostRequest,
   PostResponse,
   PostListResponse,
+  ListPostsByAuthorParams,
   ProblemDetail,
 } from '../api/generated/openAPIDefinition.schemas.ts'
 
@@ -44,7 +45,11 @@ export interface ApiClient {
   baseURL: string
   signup(input: SignupRequest): Promise<SignupResult>
   login(input: LoginRequest): Promise<LoginResult>
-  listPostsByAuthor(token: string, authorId: string): Promise<ListPostsByAuthorResult>
+  listPostsByAuthor(
+    token: string,
+    authorId: string,
+    params?: ListPostsByAuthorParams,
+  ): Promise<ListPostsByAuthorResult>
   createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult>
   deletePost(token: string, postId: string): Promise<DeletePostResult>
 }
@@ -78,8 +83,12 @@ export function createApiClient(baseURL: string): ApiClient {
       const body = text.length > 0 ? JSON.parse(text) : {}
       return { status: res.status, body }
     },
-    async listPostsByAuthor(token: string, authorId: string): Promise<ListPostsByAuthorResult> {
-      const res = await fetch(`${baseURL}${getListPostsByAuthorUrl(authorId)}`, {
+    async listPostsByAuthor(
+      token: string,
+      authorId: string,
+      params?: ListPostsByAuthorParams,
+    ): Promise<ListPostsByAuthorResult> {
+      const res = await fetch(`${baseURL}${getListPostsByAuthorUrl(authorId, params)}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json, application/problem+json',
