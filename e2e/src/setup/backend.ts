@@ -79,6 +79,10 @@ export async function startBackend(config: BackendConfig): Promise<BackendHandle
         // cookies over HTTP even to 127.0.0.1, which would break the
         // boot-time refresh flow under WebKit.
         APP_AUTH_REFRESH_COOKIE_SECURE: 'false',
+        // Overrides `app.auth.access-token-ttl` (defaults to PT15M) so the
+        // refresh-on-401 e2e proof can lapse the access token within a
+        // Playwright test budget. Scoped to the e2e harness only.
+        APP_AUTH_ACCESS_TOKEN_TTL: 'PT2S',
       },
     },
   )

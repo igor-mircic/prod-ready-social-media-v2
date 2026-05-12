@@ -37,3 +37,22 @@ test('axe scans clean across /login, /signup, and /home', async ({
   ).toBeVisible()
   await runAxeScan(page, testInfo)
 })
+
+test('axe scans clean on /not-found (unauthenticated)', async ({ page }, testInfo) => {
+  await page.goto('/this-does-not-exist')
+  await expect(page.getByText(/not found|404/i).first()).toBeVisible()
+  await runAxeScan(page, testInfo)
+})
+
+test('axe scans clean on /not-found (authenticated)', async ({
+  page,
+  apiClient,
+}, testInfo) => {
+  const input = randomSignupInput()
+  await signupViaApi(apiClient, input)
+  await loginAndLandOnHome(page, input)
+
+  await page.goto('/this-does-not-exist')
+  await expect(page.getByText(/not found|404/i).first()).toBeVisible()
+  await runAxeScan(page, testInfo)
+})
