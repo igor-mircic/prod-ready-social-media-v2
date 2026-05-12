@@ -16,7 +16,7 @@
 
 ## 4. PR and post-merge validation
 
-- [ ] 4.1 Open a PR from the change branch off `main` with the title "Cache Gradle deps and Playwright browsers in CI" and a body listing both cache additions, expected wall-clock impact, and the stale-cache tradeoff.
+- [x] 4.1 Open a PR from the change branch off `main` with the title "Cache Gradle deps and Playwright browsers in CI" and a body listing both cache additions, expected wall-clock impact, and the stale-cache tradeoff.
 - [ ] 4.2 On the PR's CI run, confirm both setup-java behavior and Playwright install behavior remain green (this run will be a cold cache for both — it should still pass).
 - [ ] 4.3 After merge to `main`, observe the next backend job's `setup-java` step reports a Gradle cache save, and the e2e job's `actions/cache@v4` step reports a save for each matrix shard.
 - [ ] 4.4 On the **second** post-merge run (with no Gradle/lockfile changes), confirm the backend job restores a Gradle cache hit and each e2e shard restores its Playwright cache hit.
