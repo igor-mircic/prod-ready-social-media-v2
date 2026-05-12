@@ -40,5 +40,5 @@
 
 ## 5. PR
 
-- [ ] 5.1 Open a PR titled `prove-refresh-interceptor-e2e` referencing PR #15 in the body as the precedent (continuation of the auth-e2e hardening cadence, closing the unhappy-path halves of the refresh wire).
-- [ ] 5.2 In the PR description, call out that the change is test-only plus spec text: no `frontend/` source files change, no `backend/` source files change, no new harness env vars. Reviewers should be able to confirm the change set is `e2e/**` + `openspec/**`.
+- [x] 5.1 Open a PR titled `prove-refresh-interceptor-e2e` referencing PR #15 in the body as the precedent (continuation of the auth-e2e hardening cadence, closing the unhappy-path halves of the refresh wire).
+- [x] 5.2 In the PR description, call out that the change is test-only plus spec text: no `frontend/` source files change, no `backend/` source files change, no new harness env vars. Reviewers should be able to confirm the change set is `e2e/**` + `openspec/**`.
