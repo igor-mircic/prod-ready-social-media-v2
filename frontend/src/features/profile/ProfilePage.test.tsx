@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { test, expect, beforeEach } from 'vitest'
+import { test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 import { AuthProvider, useAuth } from '../auth/AuthContext'
+import { getGetFeedQueryKey } from '@/api/generated/queries/feed-controller/feed-controller'
 import { ProfilePage } from './ProfilePage'
 import { server } from '../../test/msw-server'
 
@@ -332,6 +333,96 @@ test('clicking Follow invokes the mutation and refetches stats', async () => {
   expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy()
   await waitFor(() => expect(findCountsText(/1 follower\b/)).toBeTruthy())
   expect(followCallCount).toBe(1)
+})
+
+test('clicking Follow invalidates the feed query key', async () => {
+  const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    followStatsHandler(ALICE_ID, {
+      followers: 0,
+      following: 0,
+      viewerFollows: false,
+    }),
+    http.post(
+      `*/api/v1/users/${ALICE_ID}/follow`,
+      () => new HttpResponse(null, { status: 204 }),
+    ),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  const followBtn = await screen.findByRole('button', { name: 'Follow' })
+  await userEvent.click(followBtn)
+
+  const expectedKey = getGetFeedQueryKey()
+  await waitFor(() =>
+    expect(
+      spy.mock.calls.some(([arg]) => {
+        if (!arg || typeof arg !== 'object') return false
+        const queryKey = (arg as { queryKey?: readonly unknown[] }).queryKey
+        return (
+          Array.isArray(queryKey) &&
+          queryKey.length === expectedKey.length &&
+          queryKey.every((v, i) => v === expectedKey[i])
+        )
+      }),
+    ).toBe(true),
+  )
+  spy.mockRestore()
+})
+
+test('clicking Unfollow invalidates the feed query key', async () => {
+  const spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries')
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    followStatsHandler(ALICE_ID, {
+      followers: 1,
+      following: 0,
+      viewerFollows: true,
+    }),
+    http.delete(
+      `*/api/v1/users/${ALICE_ID}/follow`,
+      () => new HttpResponse(null, { status: 204 }),
+    ),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  const unfollowBtn = await screen.findByRole('button', { name: 'Unfollow' })
+  await userEvent.click(unfollowBtn)
+
+  const expectedKey = getGetFeedQueryKey()
+  await waitFor(() =>
+    expect(
+      spy.mock.calls.some(([arg]) => {
+        if (!arg || typeof arg !== 'object') return false
+        const queryKey = (arg as { queryKey?: readonly unknown[] }).queryKey
+        return (
+          Array.isArray(queryKey) &&
+          queryKey.length === expectedKey.length &&
+          queryKey.every((v, i) => v === expectedKey[i])
+        )
+      }),
+    ).toBe(true),
+  )
+  spy.mockRestore()
 })
 
 test('clicking Unfollow invokes the mutation and refetches stats', async () => {

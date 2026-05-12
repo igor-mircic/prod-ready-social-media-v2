@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { test, expect, beforeEach } from 'vitest'
+import { test, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -116,7 +116,6 @@ test('does NOT render the delete control when the post is not the caller’s', a
           items: [
             {
               id: POST_ID,
-              // Author is Alice; but the current user is Bob — not the author.
               author: { id: ALICE_ID, displayName: 'Alice' },
               body: 'alice post viewed by bob',
               createdAt: '2026-05-11T12:00:00Z',
@@ -141,7 +140,7 @@ test('directly-rendered PostCard hides the delete control for non-author', async
   renderWithCurrentUser(
     BOB_ID,
     <PostCard
-      listOwnerId={ALICE_ID}
+      onDeleteSuccess={vi.fn()}
       post={{
         id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
         author: { id: ALICE_ID, displayName: 'Alice' },
@@ -159,7 +158,7 @@ test('renders the author displayName as a link to /users/{author.id}', async () 
   renderWithCurrentUser(
     BOB_ID,
     <PostCard
-      listOwnerId={ALICE_ID}
+      onDeleteSuccess={vi.fn()}
       post={{
         id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
         author: { id: ALICE_ID, displayName: 'Alice' },
@@ -172,4 +171,35 @@ test('renders the author displayName as a link to /users/{author.id}', async () 
 
   const authorLink = await screen.findByRole('link', { name: 'Alice' })
   expect(authorLink.getAttribute('href')).toBe(`/users/${ALICE_ID}`)
+})
+
+test('invokes onDeleteSuccess exactly once after successful delete', async () => {
+  const user = userEvent.setup()
+  const POST_ID = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+  const onDeleteSuccess = vi.fn()
+
+  server.use(
+    http.delete(
+      `*/api/v1/posts/${POST_ID}`,
+      () => new HttpResponse(null, { status: 204 }),
+    ),
+  )
+
+  renderWithCurrentUser(
+    ALICE_ID,
+    <PostCard
+      onDeleteSuccess={onDeleteSuccess}
+      post={{
+        id: POST_ID,
+        author: { id: ALICE_ID, displayName: 'Alice' },
+        body: 'callback target',
+        createdAt: '2026-05-11T12:00:00Z',
+      }}
+    />,
+  )
+
+  await waitFor(() => expect(screen.getByText('callback target')).toBeTruthy())
+  await user.click(screen.getByRole('button', { name: /delete post/i }))
+
+  await waitFor(() => expect(onDeleteSuccess).toHaveBeenCalledTimes(1))
 })

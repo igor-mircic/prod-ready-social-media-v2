@@ -2,54 +2,45 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 
 import { ApiError } from '@/api/client'
 import {
-  getListPostsByAuthorQueryKey,
-  listPostsByAuthor,
-  type listPostsByAuthorResponse,
-} from '@/api/generated/queries/posts-controller/posts-controller'
+  getFeed,
+  getGetFeedQueryKey,
+  type getFeedResponse,
+} from '@/api/generated/queries/feed-controller/feed-controller'
 import type {
   PostListResponse,
   PostResponse,
 } from '@/api/generated/queries/openAPIDefinition.schemas'
 import { Button } from '@/components/ui/button'
 
-import { PostCard } from './PostCard'
-import { postsByAuthorListKeyPrefix } from './postQueryKeys'
+import { PostCard } from '../posts/PostCard'
 
-interface PostListProps {
-  userId: string
-}
-
-function extractPage(
-  response: listPostsByAuthorResponse,
-): PostListResponse | null {
+function extractPage(response: getFeedResponse): PostListResponse | null {
   if (response.status === 200) {
     return response.data
   }
   return null
 }
 
-export function PostList({ userId }: PostListProps) {
+export function FeedList() {
   const queryClient = useQueryClient()
   const query = useInfiniteQuery({
-    queryKey: getListPostsByAuthorQueryKey(userId),
+    queryKey: getGetFeedQueryKey(),
     queryFn: ({ pageParam }) => {
       const params = pageParam ? { cursor: pageParam as string } : undefined
-      return listPostsByAuthor(userId, params)
+      return getFeed(params)
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) =>
       extractPage(lastPage)?.nextCursor ?? undefined,
   })
 
-  const onPostDeleted = () =>
-    queryClient.invalidateQueries({
-      queryKey: postsByAuthorListKeyPrefix(userId),
-    })
+  const onFeedItemDeleted = () =>
+    queryClient.invalidateQueries({ queryKey: getGetFeedQueryKey() })
 
   if (query.isLoading) {
     return (
-      <section aria-label="Posts" aria-busy="true">
-        <p className="text-sm text-muted-foreground">Loading posts…</p>
+      <section aria-label="Feed" aria-busy="true">
+        <p className="text-sm text-muted-foreground">Loading feed…</p>
       </section>
     )
   }
@@ -58,9 +49,9 @@ export function PostList({ userId }: PostListProps) {
     const message =
       query.error instanceof ApiError
         ? (query.error.detail ?? query.error.title ?? query.error.message)
-        : 'Could not load posts.'
+        : 'Could not load feed.'
     return (
-      <section aria-label="Posts">
+      <section aria-label="Feed">
         <p role="alert" className="text-sm text-destructive">
           {message}
         </p>
@@ -73,16 +64,20 @@ export function PostList({ userId }: PostListProps) {
 
   if (items.length === 0) {
     return (
-      <section aria-label="Posts">
+      <section aria-label="Feed">
         <p className="text-sm text-muted-foreground">No posts yet.</p>
       </section>
     )
   }
 
   return (
-    <section aria-label="Posts" className="flex flex-col gap-3">
+    <section aria-label="Feed" className="flex flex-col gap-3">
       {items.map((post) => (
-        <PostCard key={post.id} post={post} onDeleteSuccess={onPostDeleted} />
+        <PostCard
+          key={post.id}
+          post={post}
+          onDeleteSuccess={onFeedItemDeleted}
+        />
       ))}
       {query.hasNextPage && (
         <Button

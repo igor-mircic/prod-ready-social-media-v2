@@ -1,5 +1,6 @@
 package com.prodready.social.follows;
 
+import com.prodready.social.feed.FeedFanoutService;
 import com.prodready.social.useraccounts.UserRepository;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -13,10 +14,15 @@ public class FollowService {
 
   private final FollowRepository followRepository;
   private final UserRepository userRepository;
+  private final FeedFanoutService feedFanoutService;
 
-  public FollowService(FollowRepository followRepository, UserRepository userRepository) {
+  public FollowService(
+      FollowRepository followRepository,
+      UserRepository userRepository,
+      FeedFanoutService feedFanoutService) {
     this.followRepository = followRepository;
     this.userRepository = userRepository;
+    this.feedFanoutService = feedFanoutService;
   }
 
   @Transactional
@@ -26,10 +32,11 @@ public class FollowService {
     }
     requireUserExists(targetId);
     FollowId id = new FollowId(callerId, targetId);
-    if (followRepository.existsById(id)) {
-      return;
+    if (!followRepository.existsById(id)) {
+      followRepository.save(new Follow(id));
     }
-    followRepository.save(new Follow(id));
+    // Idempotent path: re-follow backfill is harmless thanks to ON CONFLICT in the helper.
+    feedFanoutService.onFollow(callerId, targetId);
   }
 
   @Transactional
@@ -41,6 +48,7 @@ public class FollowService {
     } catch (EmptyResultDataAccessException ignored) {
       // Idempotent: a missing row is a no-op.
     }
+    feedFanoutService.onUnfollow(callerId, targetId);
   }
 
   @Transactional(readOnly = true)

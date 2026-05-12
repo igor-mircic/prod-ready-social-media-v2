@@ -1,11 +1,14 @@
 import { useNavigate } from 'react-router-dom'
 
-import { useLogout, useMe } from '@/api/generated/queries/auth-controller/auth-controller'
+import {
+  useLogout,
+  useMe,
+} from '@/api/generated/queries/auth-controller/auth-controller'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '../auth/AuthContext'
+import { FeedList } from '../feed/FeedList'
 import { PostComposer } from '../posts/PostComposer'
-import { PostList } from '../posts/PostList'
 
 export function HomePage() {
   const navigate = useNavigate()
@@ -34,7 +37,9 @@ export function HomePage() {
         <Card className="w-full max-w-sm">
           <CardHeader>
             <CardTitle>
-              <h2 className="m-0 text-base font-medium leading-snug">Profile unavailable</h2>
+              <h2 className="m-0 text-base font-medium leading-snug">
+                Profile unavailable
+              </h2>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -81,7 +86,7 @@ export function HomePage() {
           </CardContent>
         </Card>
         <PostComposer authorUserId={userId} />
-        <PostList userId={userId} />
+        <FeedList />
       </div>
     </div>
   )

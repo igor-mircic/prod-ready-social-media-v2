@@ -52,6 +52,7 @@ class FollowsControllerIT {
 
   @BeforeEach
   void cleanDatabase() {
+    jdbc.update("DELETE FROM feed_entries");
     jdbc.update("DELETE FROM follows");
     jdbc.update("DELETE FROM posts");
     jdbc.update("DELETE FROM auth_refresh_tokens");
@@ -235,6 +236,111 @@ class FollowsControllerIT {
     mvc.perform(delete("/api/v1/users/" + UUID.randomUUID() + "/follow"))
         .andExpect(status().isUnauthorized())
         .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
+  }
+
+  private long feedEntryCountForRecipient(UUID recipientId) {
+    Long n =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE recipient_id = ?", Long.class, recipientId);
+    return n == null ? 0 : n;
+  }
+
+  private UUID createPostViaApi(String token, String body) throws Exception {
+    String response =
+        mvc.perform(
+                post("/api/v1/posts")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"body\":\"" + body + "\"}"))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    return UUID.fromString(mapper.readTree(response).get("id").asText());
+  }
+
+  @Test
+  void follow_backfillsRecipientFeedCapped() throws Exception {
+    TestUser alice = signupAndLogin("alice@example.com", "Alice");
+    TestUser bob = signupAndLogin("bob@example.com", "Bob");
+
+    // Seed 105 of Alice's posts directly (timestamps staggered by 1s).
+    java.time.OffsetDateTime base =
+        java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).minusDays(1);
+    java.util.List<UUID> seeded = new java.util.ArrayList<>(105);
+    for (int i = 0; i < 105; i++) {
+      UUID pid = UUID.randomUUID();
+      seeded.add(pid);
+      jdbc.update(
+          "INSERT INTO posts (id, author_id, body, created_at) VALUES (?, ?, ?, ?)",
+          pid,
+          alice.id(),
+          "seed-" + i,
+          base.plusSeconds(i));
+    }
+
+    mvc.perform(
+            post("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+
+    assertThat(feedEntryCountForRecipient(bob.id())).isEqualTo(100L);
+    // The kept set must be the 100 most-recent posts (indices 5..104 inclusive).
+    java.util.List<UUID> kept =
+        jdbc.queryForList(
+            "SELECT post_id FROM feed_entries WHERE recipient_id = ?", UUID.class, bob.id());
+    assertThat(new java.util.HashSet<>(kept))
+        .isEqualTo(new java.util.HashSet<>(seeded.subList(5, 105)));
+  }
+
+  @Test
+  void unfollow_scrubsRecipientFeedForAuthor() throws Exception {
+    TestUser alice = signupAndLogin("alice@example.com", "Alice");
+    TestUser carol = signupAndLogin("carol@example.com", "Carol");
+    TestUser bob = signupAndLogin("bob@example.com", "Bob");
+
+    UUID a1 = createPostViaApi(alice.accessToken(), "a1");
+    UUID c1 = createPostViaApi(carol.accessToken(), "c1");
+    mvc.perform(
+            post("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+    mvc.perform(
+            post("/api/v1/users/" + carol.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+
+    // Bob's feed_entries: a1 (from Alice) + c1 (from Carol).
+    assertThat(feedEntryCountForRecipient(bob.id())).isEqualTo(2L);
+
+    mvc.perform(
+            delete("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+
+    java.util.List<UUID> remaining =
+        jdbc.queryForList(
+            "SELECT post_id FROM feed_entries WHERE recipient_id = ?", UUID.class, bob.id());
+    assertThat(remaining).containsExactly(c1);
+    assertThat(remaining).doesNotContain(a1);
+  }
+
+  @Test
+  void selfUnfollow_doesNotScrubOwnPosts() throws Exception {
+    TestUser alice = signupAndLogin("alice@example.com", "Alice");
+    createPostViaApi(alice.accessToken(), "own-1");
+    createPostViaApi(alice.accessToken(), "own-2");
+
+    // 2 self-fanout rows present.
+    assertThat(feedEntryCountForRecipient(alice.id())).isEqualTo(2L);
+
+    mvc.perform(
+            delete("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
+        .andExpect(status().isNoContent());
+
+    // Self-fanout rows survive the self-unfollow.
+    assertThat(feedEntryCountForRecipient(alice.id())).isEqualTo(2L);
   }
 
   @Test

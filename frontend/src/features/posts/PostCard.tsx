@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
@@ -7,11 +6,10 @@ import type { PostResponse } from '@/api/generated/queries/openAPIDefinition.sch
 import { Button } from '@/components/ui/button'
 
 import { useAuth } from '../auth/AuthContext'
-import { postsByAuthorListKeyPrefix } from './postQueryKeys'
 
 interface PostCardProps {
   post: PostResponse
-  listOwnerId: string
+  onDeleteSuccess: () => void
 }
 
 function formatCreatedAt(value: string | undefined): string {
@@ -23,17 +21,14 @@ function formatCreatedAt(value: string | undefined): string {
   }
 }
 
-export function PostCard({ post, listOwnerId }: PostCardProps) {
+export function PostCard({ post, onDeleteSuccess }: PostCardProps) {
   const auth = useAuth()
-  const queryClient = useQueryClient()
   const isOwnPost = !!post.author?.id && post.author.id === auth.currentUser?.id
 
   const deleteMutation = useDeletePost({
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({
-          queryKey: postsByAuthorListKeyPrefix(listOwnerId),
-        })
+        onDeleteSuccess()
       },
     },
   })

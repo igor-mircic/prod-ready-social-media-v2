@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
+import { getGetFeedQueryKey } from '@/api/generated/queries/feed-controller/feed-controller'
 import {
   getGetFollowStatsQueryKey,
   useFollowUser,
@@ -26,16 +27,18 @@ export function ProfilePage() {
   const isOwnProfile =
     !!auth.currentUser?.id && auth.currentUser.id === safeUserId
 
-  const invalidateStats = () =>
+  const invalidateStatsAndFeed = () => {
     queryClient.invalidateQueries({
       queryKey: getGetFollowStatsQueryKey(safeUserId),
     })
+    queryClient.invalidateQueries({ queryKey: getGetFeedQueryKey() })
+  }
 
   const followMutation = useFollowUser({
-    mutation: { onSuccess: invalidateStats },
+    mutation: { onSuccess: invalidateStatsAndFeed },
   })
   const unfollowMutation = useUnfollowUser({
-    mutation: { onSuccess: invalidateStats },
+    mutation: { onSuccess: invalidateStatsAndFeed },
   })
 
   const isNotFound =
