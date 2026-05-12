@@ -64,10 +64,17 @@ test.describe('UI vertical', () => {
 
     // Alice posts a new third post via the API.
     await new Promise((r) => setTimeout(r, 3))
-    await apiClient.createPost(aliceToken, { body: 'alice-fresh' })
+    const fresh = await apiClient.createPost(aliceToken, {
+      body: 'alice-fresh',
+    })
+    expect(fresh.status).toBe(201)
 
-    // Reload /home: 4 posts, alice-fresh on top.
+    // Force a fresh getFeed by reloading. Some browsers serve `page.reload()`
+    // from BFCache, which would mask the freshly-fanned-out entry; assert on
+    // content first (which retries until the text appears) and only then on
+    // the count.
     await page.reload()
+    await expect(page.getByText('alice-fresh')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByRole('article', { name: 'Post' })).toHaveCount(4)
     await expect(
       page.getByRole('article', { name: 'Post' }).first(),
