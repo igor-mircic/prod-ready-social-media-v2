@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change add-posts. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: A `posts` table is created by Flyway migration
 
 The `backend/` project SHALL include a Flyway migration `V3__create_posts.sql` that creates a `posts` table with columns sufficient to represent an authored post with soft-delete semantics: a primary key, an author foreign key, a body, a creation timestamp, and a nullable deletion timestamp.
@@ -69,7 +67,7 @@ The create endpoint SHALL validate the request using `jakarta.validation` annota
 
 ### Requirement: Read-post-by-id endpoint returns the post
 
-The backend SHALL expose `GET /api/v1/posts/{id}`. On success, the endpoint SHALL return `200 OK` with a `PostResponse` body for the requested post. The endpoint SHALL exclude soft-deleted rows.
+The backend SHALL expose `GET /api/v1/posts/{id}`. On success, the endpoint SHALL return `200 OK` with a `PostResponse` body for the requested post. The endpoint SHALL exclude soft-deleted rows. Read access is NOT scoped to the post's author — any authenticated caller SHALL be able to read any non-deleted post.
 
 #### Scenario: Read returns the post
 
@@ -94,9 +92,15 @@ The backend SHALL expose `GET /api/v1/posts/{id}`. On success, the endpoint SHAL
 - **WHEN** a client calls `GET /api/v1/posts/{id}` without an `Authorization` header
 - **THEN** the response status is 401.
 
+#### Scenario: Cross-user read is permitted
+
+- **WHEN** an authenticated client whose user id is NOT equal to the post's `author_id` calls `GET /api/v1/posts/{id}` for an existing, non-deleted post
+- **THEN** the response status is 200
+- **AND** the response body is the same `PostResponse` shape that the author would receive.
+
 ### Requirement: List-posts-by-author endpoint is cursor-paginated
 
-The backend SHALL expose `GET /api/v1/users/{userId}/posts` that returns the requested user's non-deleted posts ordered by `created_at DESC, id DESC`. The endpoint SHALL accept optional query parameters `cursor` (opaque string) and `limit` (integer). The response body SHALL be `{ items: PostResponse[], nextCursor: string | null }`.
+The backend SHALL expose `GET /api/v1/users/{userId}/posts` that returns the requested user's non-deleted posts ordered by `created_at DESC, id DESC`. The endpoint SHALL accept optional query parameters `cursor` (opaque string) and `limit` (integer). The response body SHALL be `{ items: PostResponse[], nextCursor: string | null }`. List access is NOT scoped to the path's `userId` — any authenticated caller SHALL be able to list any user's non-deleted posts.
 
 #### Scenario: First page returns the most recent posts
 
@@ -143,6 +147,12 @@ The backend SHALL expose `GET /api/v1/users/{userId}/posts` that returns the req
 - **WHEN** a client calls `GET /api/v1/users/{userId}/posts` without an `Authorization` header
 - **THEN** the response status is 401.
 
+#### Scenario: Cross-user list is permitted
+
+- **WHEN** an authenticated client whose own user id is NOT equal to the path `userId` calls `GET /api/v1/users/{userId}/posts`
+- **THEN** the response status is 200
+- **AND** the response body is the same `{ items, nextCursor }` shape that the path-user would receive.
+
 ### Requirement: Cursor is opaque and versioned
 
 The list endpoint's `nextCursor` SHALL be an opaque `base64url`-encoded string whose decoded byte sequence is `[version-byte] [created_at-millis-since-epoch, 8 bytes big-endian] [id-uuid, 16 bytes]`. Clients SHALL treat the cursor as opaque.
@@ -163,7 +173,7 @@ The list endpoint's `nextCursor` SHALL be an opaque `base64url`-encoded string w
 
 ### Requirement: Delete-post endpoint soft-deletes the caller's own post
 
-The backend SHALL expose `DELETE /api/v1/posts/{id}`. On success, the endpoint SHALL set `deleted_at = now()` on the post row and SHALL return `204 No Content`. The endpoint SHALL refuse to delete posts the caller does not author.
+The backend SHALL expose `DELETE /api/v1/posts/{id}`. On success, the endpoint SHALL set `deleted_at = now()` on the post row and SHALL return `204 No Content`. The endpoint SHALL refuse to delete posts the caller does not author. A non-author delete SHALL be rejected with `404 Not Found` (not `403 Forbidden`) as a deliberate non-disclosure choice: the endpoint MUST NOT reveal to a non-author whether a given `postId` exists. The same `404` response is returned for an unknown id, a soft-deleted id, and another user's id — externally indistinguishable.
 
 #### Scenario: Author can soft-delete their own post
 
@@ -199,6 +209,13 @@ The backend SHALL expose `DELETE /api/v1/posts/{id}`. On success, the endpoint S
 
 - **WHEN** a client calls `DELETE /api/v1/posts/{id}` without an `Authorization` header
 - **THEN** the response status is 401.
+
+#### Scenario: 404 responses for cross-user, unknown, and soft-deleted ids are indistinguishable
+
+- **WHEN** a non-author authenticated client calls `DELETE /api/v1/posts/{id}` for each of: (a) another user's live post, (b) a syntactically-valid id that does not exist, (c) a soft-deleted post
+- **THEN** all three responses have status 404
+- **AND** all three response bodies are `ProblemDetail` with `status` 404
+- **AND** no field of the response body discloses which of (a), (b), or (c) the id actually was.
 
 ### Requirement: PostResponse embeds an author summary
 
@@ -374,3 +391,50 @@ The `e2e/` project SHALL include a Playwright spec at `e2e/tests/posts.spec.ts` 
 - **WHEN** the Playwright spec attempts to submit the composer with an empty body
 - **THEN** the SPA blocks the submission client-side
 - **AND** no network request to `POST /api/v1/posts` is observed.
+
+### Requirement: Playwright e2e spec exercises the cross-user posts contract
+
+The `e2e/` project SHALL include a Playwright spec at `e2e/tests/posts.cross-user.spec.ts` that exercises the multi-user posts contract end-to-end against the real backend and frontend. The spec SHALL prove three facts in one run: (1) any authenticated user can list another user's non-deleted posts via `GET /api/v1/users/{userId}/posts`; (2) a non-author's attempt to `DELETE /api/v1/posts/{postId}` is rejected with status `404` (not `403`); (3) the post remains visible to its author after a non-author's failed delete. The non-author's half of the spec SHALL be driven through the e2e `apiClient` fixture carrying a bearer token, not through the SPA, because the SPA has no route to view another user's posts.
+
+#### Scenario: Cross-user read, blocked cross-user delete, author's view unchanged
+
+- **WHEN** the Playwright spec runs against the harness
+- **THEN** it signs up Alice via `POST /api/v1/auth/signup` (no UI)
+- **AND** signs up Bob via `POST /api/v1/auth/signup` (no UI)
+- **AND** logs Alice in via the SPA's login form
+- **AND** Alice composes a post via the SPA's composer with a non-empty body and submits
+- **AND** the spec captures Alice's new post id from the `POST /api/v1/posts` response body
+- **AND** Alice observes the post in her rendered list on `/home`
+- **AND** Bob obtains a bearer token via `POST /api/v1/auth/login` driven through the `apiClient` (no UI)
+- **AND** Bob calls `GET /api/v1/users/{aliceId}/posts` with `Authorization: Bearer <bob-token>`
+- **AND** the response status is 200
+- **AND** the response body's `items` contains a `PostResponse` whose `id` equals Alice's captured post id and whose `body` equals Alice's composed body
+- **AND** Bob calls `DELETE /api/v1/posts/{aliceId-post-id}` with `Authorization: Bearer <bob-token>`
+- **AND** the response status is 404
+- **AND** the response body is a `ProblemDetail` with `status` 404
+- **AND** Alice reloads `/home`
+- **AND** Alice still observes her post rendered in the list.
+
+### Requirement: E2E helpers support multi-user API flows
+
+The `e2e/` project SHALL provide helper functions for signing up and logging in additional users via the API (without going through the SPA's UI). The `ApiClient` SHALL expose methods to perform an authenticated `GET /api/v1/users/{userId}/posts` and an authenticated `DELETE /api/v1/posts/{id}` carrying a bearer token supplied per call. These helpers SHALL be implemented as thin wrappers in `e2e/src/helpers/` and/or as additional methods on `e2e/src/helpers/apiClient.ts`, following the existing pattern set by `signupViaApi` and the existing `ApiClient.signup` method.
+
+#### Scenario: ApiClient exposes login
+
+- **WHEN** a test calls `apiClient.login(input)` with a valid `LoginRequest`
+- **THEN** the helper performs `POST /api/v1/auth/login` against the real backend
+- **AND** returns a `{ status, body }` shape consistent with the existing `signup` method
+- **AND** the body on success contains the bearer access token used by subsequent authenticated calls.
+
+#### Scenario: ApiClient exposes authenticated listPostsByAuthor
+
+- **WHEN** a test calls `apiClient.listPostsByAuthor(token, authorId)` with a valid bearer `token` and an existing `authorId`
+- **THEN** the helper performs `GET /api/v1/users/{authorId}/posts` against the real backend with `Authorization: Bearer <token>`
+- **AND** returns a `{ status, body }` shape consistent with the existing `signup` method.
+
+#### Scenario: ApiClient exposes authenticated deletePost
+
+- **WHEN** a test calls `apiClient.deletePost(token, postId)` with a valid bearer `token` and any `postId`
+- **THEN** the helper performs `DELETE /api/v1/posts/{postId}` against the real backend with `Authorization: Bearer <token>`
+- **AND** returns a `{ status, body }` shape consistent with the existing `signup` method.
+
