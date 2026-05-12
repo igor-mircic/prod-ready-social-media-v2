@@ -1,10 +1,10 @@
 // Explicit axe scans on /login, /signup, /home, and /users/:userId. The
 // implicit per-test hook in `e2e/src/fixtures/test.ts` already scans the
 // final URL of each test; this spec pins clean scans on each of the four
-// key routes explicitly. The /home and /users/:userId scans run after a
-// fresh user has logged in and seeded one post so the composer and list
-// (on /home) and the profile header + seeded post (on /users/:userId) are
-// both rendered with non-trivial content.
+// key routes explicitly. The /home scan runs against a populated feed (Bob
+// follows Alice; Alice has 2 posts seeded via the API; Bob composes one via
+// the SPA) so the feed accessibility is exercised with three rendered
+// PostCards rather than an empty / single-self-post page.
 import { test, expect } from '../src/fixtures/test.ts'
 import { runAxeScan } from '../src/fixtures/axe.ts'
 import { randomSignupInput, signupViaApi } from '../src/helpers/signup.ts'
@@ -22,50 +22,43 @@ test('axe scans clean across /login, /signup, /home, and /users/:userId', async 
   await expect(page.getByRole('button', { name: 'Sign up' })).toBeVisible()
   await runAxeScan(page, testInfo)
 
+  // Seed: Alice signs up + posts 2 via API; Bob signs up + follows Alice via
+  // API. Then Bob logs into the SPA and composes 1 post.
   const aliceInput = randomSignupInput({ displayName: 'Alice' })
+  const bobInput = randomSignupInput({ displayName: 'Bob' })
   const alice = await signupViaApi(apiClient, aliceInput)
+  await signupViaApi(apiClient, bobInput)
   const aliceId = alice.id
   expect(aliceId, 'signup must return Alice id').toBeTruthy()
+
   const { accessToken: aliceToken } = await loginViaApi(apiClient, {
     email: aliceInput.email,
     password: aliceInput.password,
   })
-
-  const seedBody = 'Axe seed post'
-  const seeded = await apiClient.createPost(aliceToken, { body: seedBody })
-  expect(seeded.status).toBe(201)
-
-  await loginAndLandOnHome(page, aliceInput)
-  await expect(
-    page.getByRole('article', { name: 'Post' }).filter({ hasText: seedBody }),
-  ).toBeVisible()
-  await runAxeScan(page, testInfo)
-
-  await page.goto(`/users/${aliceId}`)
-  await expect(
-    page.getByRole('heading', { name: aliceInput.displayName }),
-  ).toBeVisible()
-  await expect(
-    page.getByRole('article', { name: 'Post' }).filter({ hasText: seedBody }),
-  ).toBeVisible()
-  await runAxeScan(page, testInfo)
-
-  // Seed a follow relationship so the /users/:userId scan covers the
-  // rendered counts and the followed-state toggle button.
-  const bobInput = randomSignupInput({ displayName: 'Bob' })
-  await signupViaApi(apiClient, bobInput)
   const { accessToken: bobToken } = await loginViaApi(apiClient, {
     email: bobInput.email,
     password: bobInput.password,
   })
-  const followRes = await apiClient.follow(bobToken, aliceId!)
-  expect(followRes.status).toBe(204)
 
-  // Log Alice out so Bob can log in to view Alice's profile as a follower.
-  await page.goto('/home')
-  await page.getByRole('button', { name: 'Log out' }).click()
-  await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible()
+  expect(
+    (await apiClient.createPost(aliceToken, { body: 'alice-axe-1' })).status,
+  ).toBe(201)
+  await new Promise((r) => setTimeout(r, 3))
+  expect(
+    (await apiClient.createPost(aliceToken, { body: 'alice-axe-2' })).status,
+  ).toBe(201)
+  expect((await apiClient.follow(bobToken, aliceId!)).status).toBe(204)
+
   await loginAndLandOnHome(page, bobInput)
+  await page.getByLabel('Body').fill('bob-axe-1')
+  await page.getByRole('button', { name: 'Post', exact: true }).click()
+  await expect(page.getByText('bob-axe-1')).toBeVisible()
+
+  // /home now shows 3 PostCards: Bob's own + Alice's 2.
+  await expect(page.getByRole('article', { name: 'Post' })).toHaveCount(3)
+  await runAxeScan(page, testInfo)
+
+  // Bob views Alice's profile (followed state).
   await page.goto(`/users/${aliceId}`)
   await expect(
     page.getByRole('heading', { name: aliceInput.displayName }),

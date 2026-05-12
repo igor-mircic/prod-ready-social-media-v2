@@ -50,6 +50,8 @@ class CreatePostIT {
 
   @BeforeEach
   void cleanDatabase() {
+    jdbc.update("DELETE FROM feed_entries");
+    jdbc.update("DELETE FROM follows");
     jdbc.update("DELETE FROM posts");
     jdbc.update("DELETE FROM auth_refresh_tokens");
     jdbc.update("DELETE FROM auth_access_tokens");
@@ -140,6 +142,55 @@ class CreatePostIT {
 
     Integer count = jdbc.queryForObject("SELECT count(*) FROM posts", Integer.class);
     assertThat(count).isEqualTo(0);
+  }
+
+  @Test
+  void create_fansOutToFollowersAndSelf() throws Exception {
+    PostsITSupport.TestUser alice =
+        PostsITSupport.signupAndLogin(mvc, "alice@example.com", "correcthorse", "Alice");
+    PostsITSupport.TestUser bob =
+        PostsITSupport.signupAndLogin(mvc, "bob@example.com", "correcthorse", "Bob");
+    // Bob follows Alice.
+    mvc.perform(
+            post("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+
+    String response =
+        mvc.perform(
+                post("/api/v1/posts")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(PostsITSupport.createPostBody("alice-post")))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    UUID postId = UUID.fromString(mapper.readTree(response).get("id").asText());
+
+    Long forBob =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE recipient_id = ? AND post_id = ?"
+                + " AND author_id = ?",
+            Long.class,
+            bob.id(),
+            postId,
+            alice.id());
+    Long forAlice =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE recipient_id = ? AND post_id = ?"
+                + " AND author_id = ?",
+            Long.class,
+            alice.id(),
+            postId,
+            alice.id());
+    Long totalForPost =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE post_id = ?", Long.class, postId);
+
+    assertThat(forBob).isEqualTo(1L);
+    assertThat(forAlice).isEqualTo(1L);
+    assertThat(totalForPost).isEqualTo(2L);
   }
 
   @Test

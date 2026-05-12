@@ -12,26 +12,26 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-final class PostsITSupport {
+public final class PostsITSupport {
 
   private PostsITSupport() {}
 
-  static final ObjectMapper MAPPER = new ObjectMapper();
+  public static final ObjectMapper MAPPER = new ObjectMapper();
 
-  record TestUser(UUID id, String email, String displayName, String accessToken) {}
+  public record TestUser(UUID id, String email, String displayName, String accessToken) {}
 
-  static String signupBody(String email, String password, String displayName) {
+  public static String signupBody(String email, String password, String displayName) {
     return String.format(
         "{\"email\":\"%s\",\"password\":\"%s\",\"displayName\":\"%s\"}",
         email, password, displayName);
   }
 
-  static String loginBody(String email, String password) {
+  public static String loginBody(String email, String password) {
     return String.format("{\"email\":\"%s\",\"password\":\"%s\"}", email, password);
   }
 
-  static TestUser signupAndLogin(MockMvc mvc, String email, String password, String displayName)
-      throws Exception {
+  public static TestUser signupAndLogin(
+      MockMvc mvc, String email, String password, String displayName) throws Exception {
     MvcResult signupResult =
         mvc.perform(
                 post("/api/v1/auth/signup")
@@ -54,12 +54,12 @@ final class PostsITSupport {
     return new TestUser(userId, email, displayName, accessToken);
   }
 
-  static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder authedGet(
-      String url, String accessToken) {
+  public static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder
+      authedGet(String url, String accessToken) {
     return get(url).header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken);
   }
 
-  static String createPostBody(String body) {
+  public static String createPostBody(String body) {
     return String.format("{\"body\":%s}", MAPPER.valueToTree(body).toString());
   }
 }

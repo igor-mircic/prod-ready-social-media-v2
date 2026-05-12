@@ -4,11 +4,17 @@ import { useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
+import { getGetFeedQueryKey } from '@/api/generated/queries/feed-controller/feed-controller'
 import { useCreatePost } from '@/api/generated/queries/posts-controller/posts-controller'
 import { CreatePostBody } from '@/api/generated/schemas/posts-controller/posts-controller.zod'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import {
+  Field,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field'
 
 import { useAuth } from '../auth/AuthContext'
 import { postsByAuthorListKeyPrefix } from './postQueryKeys'
@@ -48,8 +54,11 @@ export function PostComposer({ authorUserId }: PostComposerProps) {
     mutation: {
       onSuccess: () => {
         if (ownerId) {
-          queryClient.invalidateQueries({ queryKey: postsByAuthorListKeyPrefix(ownerId) })
+          queryClient.invalidateQueries({
+            queryKey: postsByAuthorListKeyPrefix(ownerId),
+          })
         }
+        queryClient.invalidateQueries({ queryKey: getGetFeedQueryKey() })
         reset({ body: '' })
       },
     },
@@ -61,7 +70,9 @@ export function PostComposer({ authorUserId }: PostComposerProps) {
 
   const apiErrorMessage =
     mutation.error instanceof ApiError
-      ? (mutation.error.detail ?? mutation.error.title ?? mutation.error.message)
+      ? (mutation.error.detail ??
+        mutation.error.title ??
+        mutation.error.message)
       : null
 
   return (
@@ -85,10 +96,15 @@ export function PostComposer({ authorUserId }: PostComposerProps) {
                 placeholder="What's on your mind?"
                 {...register('body')}
               />
-              <FieldError errors={errors.body ? [{ message: errors.body.message }] : []} />
+              <FieldError
+                errors={errors.body ? [{ message: errors.body.message }] : []}
+              />
             </Field>
 
-            <Button type="submit" disabled={!isValid || isSubmitting || mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={!isValid || isSubmitting || mutation.isPending}
+            >
               Post
             </Button>
 

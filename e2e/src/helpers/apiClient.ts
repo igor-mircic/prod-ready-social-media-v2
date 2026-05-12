@@ -2,6 +2,7 @@ import {
   getSignupUrl,
   getLoginUrl,
 } from '../api/generated/auth-controller/auth-controller.ts'
+import { getGetFeedUrl } from '../api/generated/feed-controller/feed-controller.ts'
 import {
   getFollowUserUrl,
   getUnfollowUserUrl,
@@ -24,6 +25,7 @@ import type {
   PostListResponse,
   ListPostsByAuthorParams,
   FollowStatsResponse,
+  GetFeedParams,
   ProblemDetail,
 } from '../api/generated/openAPIDefinition.schemas.ts'
 
@@ -72,6 +74,11 @@ export interface GetFollowStatsResult {
   body: FollowStatsResponse | ProblemDetail
 }
 
+export interface GetFeedResult {
+  status: number
+  body: PostListResponse | ProblemDetail
+}
+
 export interface ApiClient {
   baseURL: string
   signup(input: SignupRequest): Promise<SignupResult>
@@ -87,6 +94,7 @@ export interface ApiClient {
   follow(token: string, userId: string): Promise<FollowResult>
   unfollow(token: string, userId: string): Promise<UnfollowResult>
   getFollowStats(token: string, userId: string): Promise<GetFollowStatsResult>
+  getFeed(token: string, params?: GetFeedParams): Promise<GetFeedResult>
 }
 
 export function createApiClient(baseURL: string): ApiClient {
@@ -207,6 +215,21 @@ export function createApiClient(baseURL: string): ApiClient {
       userId: string,
     ): Promise<GetFollowStatsResult> {
       const res = await fetch(`${baseURL}${getGetFollowStatsUrl(userId)}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async getFeed(
+      token: string,
+      params?: GetFeedParams,
+    ): Promise<GetFeedResult> {
+      const res = await fetch(`${baseURL}${getGetFeedUrl(params)}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json, application/problem+json',

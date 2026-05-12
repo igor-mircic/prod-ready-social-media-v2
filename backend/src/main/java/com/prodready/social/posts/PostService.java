@@ -1,5 +1,6 @@
 package com.prodready.social.posts;
 
+import com.prodready.social.feed.FeedFanoutService;
 import com.prodready.social.useraccounts.User;
 import com.prodready.social.useraccounts.UserRepository;
 import java.time.OffsetDateTime;
@@ -20,18 +21,25 @@ public class PostService {
   private final PostRepository postRepository;
   private final UserRepository userRepository;
   private final PostCursorCodec cursorCodec;
+  private final FeedFanoutService feedFanoutService;
 
   public PostService(
-      PostRepository postRepository, UserRepository userRepository, PostCursorCodec cursorCodec) {
+      PostRepository postRepository,
+      UserRepository userRepository,
+      PostCursorCodec cursorCodec,
+      FeedFanoutService feedFanoutService) {
     this.postRepository = postRepository;
     this.userRepository = userRepository;
     this.cursorCodec = cursorCodec;
+    this.feedFanoutService = feedFanoutService;
   }
 
   @Transactional
   public PostResponse create(UUID callerId, CreatePostRequest request) {
     Post post = new Post(UUID.randomUUID(), callerId, request.body());
-    Post saved = postRepository.save(post);
+    // Flush so the posts row exists before the fanout INSERT references it via FK.
+    Post saved = postRepository.saveAndFlush(post);
+    feedFanoutService.onPostCreated(saved);
     return assemble(List.of(saved)).get(0);
   }
 
@@ -83,6 +91,7 @@ public class PostService {
     }
     post.softDelete(OffsetDateTime.now());
     postRepository.save(post);
+    feedFanoutService.onPostDeleted(postId);
   }
 
   private static int clampLimit(Integer requested) {

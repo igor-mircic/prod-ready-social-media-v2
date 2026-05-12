@@ -9,14 +9,14 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 @Component
-class PostCursorCodec {
+public class PostCursorCodec {
 
   static final byte VERSION = 0x01;
   static final int ENCODED_LENGTH = 1 + 8 + 16;
 
-  record DecodedCursor(OffsetDateTime createdAt, UUID id) {}
+  public record DecodedCursor(OffsetDateTime createdAt, UUID id) {}
 
-  String encode(OffsetDateTime createdAt, UUID id) {
+  public String encode(OffsetDateTime createdAt, UUID id) {
     ByteBuffer buf = ByteBuffer.allocate(ENCODED_LENGTH);
     buf.put(VERSION);
     buf.putLong(createdAt.toInstant().toEpochMilli());
@@ -25,7 +25,7 @@ class PostCursorCodec {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(buf.array());
   }
 
-  DecodedCursor decode(String cursor) {
+  public DecodedCursor decode(String cursor) {
     if (cursor == null || cursor.isEmpty()) {
       throw new InvalidCursorException();
     }

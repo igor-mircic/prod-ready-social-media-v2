@@ -51,6 +51,8 @@ class DeletePostIT {
 
   @BeforeEach
   void cleanDatabase() {
+    jdbc.update("DELETE FROM feed_entries");
+    jdbc.update("DELETE FROM follows");
     jdbc.update("DELETE FROM posts");
     jdbc.update("DELETE FROM auth_refresh_tokens");
     jdbc.update("DELETE FROM auth_access_tokens");
@@ -146,6 +148,34 @@ class DeletePostIT {
             delete("/api/v1/posts/" + id)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
         .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void delete_scrubsFeedEntries() throws Exception {
+    PostsITSupport.TestUser alice =
+        PostsITSupport.signupAndLogin(mvc, "alice@example.com", "correcthorse", "Alice");
+    PostsITSupport.TestUser bob =
+        PostsITSupport.signupAndLogin(mvc, "bob@example.com", "correcthorse", "Bob");
+    mvc.perform(
+            post("/api/v1/users/" + alice.id() + "/follow")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + bob.accessToken()))
+        .andExpect(status().isNoContent());
+    UUID postId = createPost(alice, "scrub-me");
+
+    Long before =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE post_id = ?", Long.class, postId);
+    assertThat(before).isEqualTo(2L);
+
+    mvc.perform(
+            delete("/api/v1/posts/" + postId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + alice.accessToken()))
+        .andExpect(status().isNoContent());
+
+    Long after =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM feed_entries WHERE post_id = ?", Long.class, postId);
+    assertThat(after).isZero();
   }
 
   @Test
