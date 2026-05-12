@@ -4,9 +4,11 @@ import {
   getListPostsByAuthorUrl,
   getDeletePostUrl,
 } from '../api/generated/posts-controller/posts-controller.ts'
+import { getGetUserUrl } from '../api/generated/users-controller/users-controller.ts'
 import type {
   SignupRequest,
   UserResponse,
+  UserSummary,
   LoginRequest,
   LoginResponse,
   CreatePostRequest,
@@ -41,6 +43,11 @@ export interface DeletePostResult {
   body: ProblemDetail | Record<string, never>
 }
 
+export interface GetUserResult {
+  status: number
+  body: UserSummary | ProblemDetail
+}
+
 export interface ApiClient {
   baseURL: string
   signup(input: SignupRequest): Promise<SignupResult>
@@ -52,6 +59,7 @@ export interface ApiClient {
   ): Promise<ListPostsByAuthorResult>
   createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult>
   deletePost(token: string, postId: string): Promise<DeletePostResult>
+  getUser(token: string, userId: string): Promise<GetUserResult>
 }
 
 export function createApiClient(baseURL: string): ApiClient {
@@ -116,6 +124,18 @@ export function createApiClient(baseURL: string): ApiClient {
     async deletePost(token: string, postId: string): Promise<DeletePostResult> {
       const res = await fetch(`${baseURL}${getDeletePostUrl(postId)}`, {
         method: 'DELETE',
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async getUser(token: string, userId: string): Promise<GetUserResult> {
+      const res = await fetch(`${baseURL}${getGetUserUrl(userId)}`, {
+        method: 'GET',
         headers: {
           Accept: 'application/json, application/problem+json',
           Authorization: `Bearer ${token}`,

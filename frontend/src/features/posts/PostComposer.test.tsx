@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 
 import { AuthProvider } from '../auth/AuthContext'
 import { PostComposer } from './PostComposer'
@@ -27,7 +28,9 @@ function renderHarness() {
   return render(
     <QueryClientProvider client={client}>
       <AuthProvider>
-        <TestHarness />
+        <MemoryRouter>
+          <TestHarness />
+        </MemoryRouter>
       </AuthProvider>
     </QueryClientProvider>,
   )

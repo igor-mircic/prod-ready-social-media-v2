@@ -52,8 +52,8 @@ final class AuthITSupport {
         .andExpect(status().isCreated());
   }
 
-  static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder
-      postWithCsrf(String urlTemplate) {
+  static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder postWithCsrf(
+      String urlTemplate) {
     return post(urlTemplate).with(csrf());
   }
 }

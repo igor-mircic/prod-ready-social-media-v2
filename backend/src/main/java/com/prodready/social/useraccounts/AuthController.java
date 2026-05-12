@@ -110,7 +110,8 @@ public class AuthController {
     ResponseCookie cookie = buildRefreshCookie(result.refreshTokenPlaintext());
     return ResponseEntity.ok()
         .header(HttpHeaders.SET_COOKIE, cookie.toString())
-        .body(new LoginResponse(result.accessTokenPlaintext(), result.accessTokenExpiresInSeconds()));
+        .body(
+            new LoginResponse(result.accessTokenPlaintext(), result.accessTokenExpiresInSeconds()));
   }
 
   @Operation(summary = "Rotate the refresh token and mint a new access token")
@@ -194,7 +195,8 @@ public class AuthController {
   })
   @SecurityRequirement(name = "bearerAuth")
   @GetMapping("/me")
-  public ResponseEntity<UserResponse> me(@AuthenticationPrincipal UserPrincipal principal, Authentication authentication) {
+  public ResponseEntity<UserResponse> me(
+      @AuthenticationPrincipal UserPrincipal principal, Authentication authentication) {
     UserPrincipal effective =
         principal != null
             ? principal
@@ -210,8 +212,8 @@ public class AuthController {
             .findById(effective.id())
             .orElseThrow(
                 () ->
-                    new org.springframework.security.authentication.InsufficientAuthenticationException(
-                        "User no longer exists"));
+                    new org.springframework.security.authentication
+                        .InsufficientAuthenticationException("User no longer exists"));
     return ResponseEntity.ok(UserResponse.fromEntity(user));
   }
 
