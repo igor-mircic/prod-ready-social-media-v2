@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 
 import { AuthProvider, useAuth } from '../auth/AuthContext'
 import { PostCard } from './PostCard'
@@ -51,7 +52,7 @@ function renderWithCurrentUser(
     <QueryClientProvider client={client}>
       <AuthProvider>
         <AuthSeeder userId={currentUserId} displayName={displayName}>
-          {ui}
+          <MemoryRouter>{ui}</MemoryRouter>
         </AuthSeeder>
       </AuthProvider>
     </QueryClientProvider>,
@@ -152,4 +153,23 @@ test('directly-rendered PostCard hides the delete control for non-author', async
   )
   await waitFor(() => expect(screen.getByText('standalone card')).toBeTruthy())
   expect(screen.queryByRole('button', { name: /delete post/i })).toBeNull()
+})
+
+test('renders the author displayName as a link to /users/{author.id}', async () => {
+  renderWithCurrentUser(
+    BOB_ID,
+    <PostCard
+      listOwnerId={ALICE_ID}
+      post={{
+        id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+        author: { id: ALICE_ID, displayName: 'Alice' },
+        body: 'author-link card',
+        createdAt: '2026-05-11T12:00:00Z',
+      }}
+    />,
+    'Bob',
+  )
+
+  const authorLink = await screen.findByRole('link', { name: 'Alice' })
+  expect(authorLink.getAttribute('href')).toBe(`/users/${ALICE_ID}`)
 })

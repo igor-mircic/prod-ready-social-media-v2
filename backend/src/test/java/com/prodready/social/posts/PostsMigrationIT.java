@@ -41,7 +41,8 @@ class PostsMigrationIT {
                 + " WHERE table_schema = 'public' AND table_name = 'posts'"
                 + " ORDER BY ordinal_position",
             String.class);
-    assertThat(columns).containsExactlyInAnyOrder("id", "author_id", "body", "created_at", "deleted_at");
+    assertThat(columns)
+        .containsExactlyInAnyOrder("id", "author_id", "body", "created_at", "deleted_at");
   }
 
   @Test

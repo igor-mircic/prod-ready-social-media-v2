@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
 import { useDeletePost } from '@/api/generated/queries/posts-controller/posts-controller'
@@ -30,7 +31,9 @@ export function PostCard({ post, listOwnerId }: PostCardProps) {
   const deleteMutation = useDeletePost({
     mutation: {
       onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: postsByAuthorListKeyPrefix(listOwnerId) })
+        queryClient.invalidateQueries({
+          queryKey: postsByAuthorListKeyPrefix(listOwnerId),
+        })
       },
     },
   })
@@ -55,13 +58,27 @@ export function PostCard({ post, listOwnerId }: PostCardProps) {
     >
       <header className="flex items-baseline justify-between gap-3">
         <p className="text-sm font-medium leading-snug">
-          {post.author?.displayName ?? 'Unknown'}
+          {post.author?.id ? (
+            <Link
+              to={`/users/${post.author.id}`}
+              className="underline-offset-4 hover:underline"
+            >
+              {post.author.displayName ?? 'Unknown'}
+            </Link>
+          ) : (
+            (post.author?.displayName ?? 'Unknown')
+          )}
         </p>
-        <time className="text-xs text-muted-foreground" dateTime={post.createdAt}>
+        <time
+          className="text-xs text-muted-foreground"
+          dateTime={post.createdAt}
+        >
           {formatCreatedAt(post.createdAt)}
         </time>
       </header>
-      <p className="whitespace-pre-wrap break-words text-sm">{post.body ?? ''}</p>
+      <p className="whitespace-pre-wrap break-words text-sm">
+        {post.body ?? ''}
+      </p>
       {isOwnPost && (
         <div className="flex items-center gap-3">
           <Button

@@ -52,9 +52,7 @@ class SecurityFilterChainIT {
   void allowlistedSignupReachesController() throws Exception {
     MvcResult result =
         mvc.perform(
-                post("/api/v1/auth/signup")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("{}"))
+                post("/api/v1/auth/signup").contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andReturn();
     int status = result.getResponse().getStatus();
     assertThat(status).as("/signup must reach controller, not be 401").isNotEqualTo(401);
@@ -65,9 +63,7 @@ class SecurityFilterChainIT {
   void allowlistedLoginReachesController() throws Exception {
     MvcResult result =
         mvc.perform(
-                post("/api/v1/auth/login")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .content("{}"))
+                post("/api/v1/auth/login").contentType(MediaType.APPLICATION_JSON).content("{}"))
             .andReturn();
     int status = result.getResponse().getStatus();
     assertThat(status).as("/login must reach controller, not be 401").isNotEqualTo(401);
@@ -78,7 +74,9 @@ class SecurityFilterChainIT {
   void allowlistedRefreshReachesController() throws Exception {
     MvcResult result = mvc.perform(post("/api/v1/auth/refresh").with(csrf())).andReturn();
     int status = result.getResponse().getStatus();
-    assertThat(status).as("/refresh must reach controller (will throw 401 from controller)").isEqualTo(401);
+    assertThat(status)
+        .as("/refresh must reach controller (will throw 401 from controller)")
+        .isEqualTo(401);
     String body = result.getResponse().getContentAsString();
     assertThat(body).contains("Invalid refresh token");
   }

@@ -18,7 +18,12 @@ public class SecurityConfig {
   };
 
   static final String[] PERMIT_ALL_GETS = {
-    "/actuator/health", "/v3/api-docs", "/v3/api-docs/**", "/swagger-ui", "/swagger-ui/**", "/favicon.ico"
+    "/actuator/health",
+    "/v3/api-docs",
+    "/v3/api-docs/**",
+    "/swagger-ui",
+    "/swagger-ui/**",
+    "/favicon.ico"
   };
 
   @Bean

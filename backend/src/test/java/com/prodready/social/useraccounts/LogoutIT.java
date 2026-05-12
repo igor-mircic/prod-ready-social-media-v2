@@ -97,7 +97,6 @@ class LogoutIT {
 
   @Test
   void logout_withoutAuthorization_returns401() throws Exception {
-    mvc.perform(post("/api/v1/auth/logout").with(csrf()))
-        .andExpect(status().isUnauthorized());
+    mvc.perform(post("/api/v1/auth/logout").with(csrf())).andExpect(status().isUnauthorized());
   }
 }

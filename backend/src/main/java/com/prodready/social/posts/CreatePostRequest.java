@@ -5,7 +5,5 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record CreatePostRequest(
-    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500)
-        @NotBlank
-        @Size(max = 500)
+    @Schema(requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500) @NotBlank @Size(max = 500)
         String body) {}
