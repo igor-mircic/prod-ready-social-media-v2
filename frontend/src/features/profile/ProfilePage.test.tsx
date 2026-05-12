@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { test, expect, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -11,6 +12,23 @@ import { server } from '../../test/msw-server'
 
 const ALICE_ID = '11111111-1111-1111-1111-111111111111'
 const BOB_ID = '22222222-2222-2222-2222-222222222222'
+
+function followStatsHandler(
+  userId: string,
+  body: { followers: number; following: number; viewerFollows: boolean },
+) {
+  return http.get(`*/api/v1/users/${userId}/follow-stats`, () =>
+    HttpResponse.json(body, { status: 200 }),
+  )
+}
+
+function findCountsText(pattern: RegExp): HTMLElement {
+  return screen.getByText(
+    (_, el) =>
+      el?.tagName === 'P' &&
+      pattern.test((el.textContent ?? '').replace(/\s+/g, ' ').trim()),
+  )
+}
 
 function AuthSeeder({
   userId,
@@ -73,6 +91,11 @@ test('renders the header and a Post when the user has seeded posts', async () =>
         { status: 200 },
       ),
     ),
+    followStatsHandler(ALICE_ID, {
+      followers: 0,
+      following: 0,
+      viewerFollows: false,
+    }),
     http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
       HttpResponse.json(
         {
@@ -112,6 +135,11 @@ test('renders the header and the empty-state when the user has zero posts', asyn
         { status: 200 },
       ),
     ),
+    followStatsHandler(ALICE_ID, {
+      followers: 0,
+      following: 0,
+      viewerFollows: false,
+    }),
     http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
       HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
     ),
@@ -169,6 +197,11 @@ test('never renders a composer textbox', async () => {
         { status: 200 },
       ),
     ),
+    followStatsHandler(ALICE_ID, {
+      followers: 0,
+      following: 0,
+      viewerFollows: false,
+    }),
     http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
       HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
     ),
@@ -182,4 +215,163 @@ test('never renders a composer textbox', async () => {
     expect(screen.getByRole('heading', { name: 'Alice' })).toBeTruthy(),
   )
   expect(screen.queryByRole('textbox')).toBeNull()
+})
+
+test('non-own profile with viewerFollows=false renders Follow button', async () => {
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    followStatsHandler(ALICE_ID, {
+      followers: 0,
+      following: 0,
+      viewerFollows: false,
+    }),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  expect(await screen.findByRole('button', { name: 'Follow' })).toBeTruthy()
+  expect(findCountsText(/0 followers/)).toBeTruthy()
+})
+
+test('non-own profile with viewerFollows=true renders Unfollow button', async () => {
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    followStatsHandler(ALICE_ID, {
+      followers: 1,
+      following: 0,
+      viewerFollows: true,
+    }),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy()
+  expect(findCountsText(/1 follower\b/)).toBeTruthy()
+})
+
+test('own profile renders counts but no toggle button', async () => {
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    followStatsHandler(ALICE_ID, {
+      followers: 5,
+      following: 4,
+      viewerFollows: false,
+    }),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, ALICE_ID, 'Alice')
+
+  await waitFor(() => expect(findCountsText(/5 followers/)).toBeTruthy())
+  expect(findCountsText(/4 following/)).toBeTruthy()
+  expect(
+    screen.queryByRole('button', { name: /^(follow|unfollow|following)$/i }),
+  ).toBeNull()
+})
+
+test('clicking Follow invokes the mutation and refetches stats', async () => {
+  let followCallCount = 0
+  let statsCallCount = 0
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    http.get(`*/api/v1/users/${ALICE_ID}/follow-stats`, () => {
+      statsCallCount += 1
+      if (statsCallCount === 1) {
+        return HttpResponse.json(
+          { followers: 0, following: 0, viewerFollows: false },
+          { status: 200 },
+        )
+      }
+      return HttpResponse.json(
+        { followers: 1, following: 0, viewerFollows: true },
+        { status: 200 },
+      )
+    }),
+    http.post(`*/api/v1/users/${ALICE_ID}/follow`, () => {
+      followCallCount += 1
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  const followBtn = await screen.findByRole('button', { name: 'Follow' })
+  await userEvent.click(followBtn)
+
+  expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy()
+  await waitFor(() => expect(findCountsText(/1 follower\b/)).toBeTruthy())
+  expect(followCallCount).toBe(1)
+})
+
+test('clicking Unfollow invokes the mutation and refetches stats', async () => {
+  let unfollowCallCount = 0
+  let statsCallCount = 0
+  server.use(
+    http.get(`*/api/v1/users/${ALICE_ID}`, () =>
+      HttpResponse.json(
+        { id: ALICE_ID, displayName: 'Alice' },
+        { status: 200 },
+      ),
+    ),
+    http.get(`*/api/v1/users/${ALICE_ID}/follow-stats`, () => {
+      statsCallCount += 1
+      if (statsCallCount === 1) {
+        return HttpResponse.json(
+          { followers: 1, following: 0, viewerFollows: true },
+          { status: 200 },
+        )
+      }
+      return HttpResponse.json(
+        { followers: 0, following: 0, viewerFollows: false },
+        { status: 200 },
+      )
+    }),
+    http.delete(`*/api/v1/users/${ALICE_ID}/follow`, () => {
+      unfollowCallCount += 1
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.get(`*/api/v1/users/${ALICE_ID}/posts`, () =>
+      HttpResponse.json({ items: [], nextCursor: null }, { status: 200 }),
+    ),
+  )
+
+  renderProfileFor(ALICE_ID, BOB_ID, 'Bob')
+
+  const unfollowBtn = await screen.findByRole('button', { name: 'Unfollow' })
+  await userEvent.click(unfollowBtn)
+
+  expect(await screen.findByRole('button', { name: 'Follow' })).toBeTruthy()
+  await waitFor(() => expect(findCountsText(/0 followers/)).toBeTruthy())
+  expect(unfollowCallCount).toBe(1)
 })

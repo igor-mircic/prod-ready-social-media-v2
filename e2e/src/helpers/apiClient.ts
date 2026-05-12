@@ -1,4 +1,12 @@
-import { getSignupUrl, getLoginUrl } from '../api/generated/auth-controller/auth-controller.ts'
+import {
+  getSignupUrl,
+  getLoginUrl,
+} from '../api/generated/auth-controller/auth-controller.ts'
+import {
+  getFollowUserUrl,
+  getUnfollowUserUrl,
+  getGetFollowStatsUrl,
+} from '../api/generated/follows-controller/follows-controller.ts'
 import {
   getCreatePostUrl,
   getListPostsByAuthorUrl,
@@ -15,6 +23,7 @@ import type {
   PostResponse,
   PostListResponse,
   ListPostsByAuthorParams,
+  FollowStatsResponse,
   ProblemDetail,
 } from '../api/generated/openAPIDefinition.schemas.ts'
 
@@ -48,6 +57,21 @@ export interface GetUserResult {
   body: UserSummary | ProblemDetail
 }
 
+export interface FollowResult {
+  status: number
+  body: ProblemDetail | Record<string, never>
+}
+
+export interface UnfollowResult {
+  status: number
+  body: ProblemDetail | Record<string, never>
+}
+
+export interface GetFollowStatsResult {
+  status: number
+  body: FollowStatsResponse | ProblemDetail
+}
+
 export interface ApiClient {
   baseURL: string
   signup(input: SignupRequest): Promise<SignupResult>
@@ -60,6 +84,9 @@ export interface ApiClient {
   createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult>
   deletePost(token: string, postId: string): Promise<DeletePostResult>
   getUser(token: string, userId: string): Promise<GetUserResult>
+  follow(token: string, userId: string): Promise<FollowResult>
+  unfollow(token: string, userId: string): Promise<UnfollowResult>
+  getFollowStats(token: string, userId: string): Promise<GetFollowStatsResult>
 }
 
 export function createApiClient(baseURL: string): ApiClient {
@@ -96,18 +123,24 @@ export function createApiClient(baseURL: string): ApiClient {
       authorId: string,
       params?: ListPostsByAuthorParams,
     ): Promise<ListPostsByAuthorResult> {
-      const res = await fetch(`${baseURL}${getListPostsByAuthorUrl(authorId, params)}`, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json, application/problem+json',
-          Authorization: `Bearer ${token}`,
+      const res = await fetch(
+        `${baseURL}${getListPostsByAuthorUrl(authorId, params)}`,
+        {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json, application/problem+json',
+            Authorization: `Bearer ${token}`,
+          },
         },
-      })
+      )
       const text = await res.text()
       const body = text.length > 0 ? JSON.parse(text) : {}
       return { status: res.status, body }
     },
-    async createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult> {
+    async createPost(
+      token: string,
+      input: CreatePostRequest,
+    ): Promise<CreatePostResult> {
       const res = await fetch(`${baseURL}${getCreatePostUrl()}`, {
         method: 'POST',
         headers: {
@@ -135,6 +168,45 @@ export function createApiClient(baseURL: string): ApiClient {
     },
     async getUser(token: string, userId: string): Promise<GetUserResult> {
       const res = await fetch(`${baseURL}${getGetUserUrl(userId)}`, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async follow(token: string, userId: string): Promise<FollowResult> {
+      const res = await fetch(`${baseURL}${getFollowUserUrl(userId)}`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async unfollow(token: string, userId: string): Promise<UnfollowResult> {
+      const res = await fetch(`${baseURL}${getUnfollowUserUrl(userId)}`, {
+        method: 'DELETE',
+        headers: {
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async getFollowStats(
+      token: string,
+      userId: string,
+    ): Promise<GetFollowStatsResult> {
+      const res = await fetch(`${baseURL}${getGetFollowStatsUrl(userId)}`, {
         method: 'GET',
         headers: {
           Accept: 'application/json, application/problem+json',

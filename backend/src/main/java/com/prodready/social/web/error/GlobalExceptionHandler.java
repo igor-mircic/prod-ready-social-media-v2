@@ -1,5 +1,6 @@
 package com.prodready.social.web.error;
 
+import com.prodready.social.follows.SelfFollowException;
 import com.prodready.social.posts.AuthorNotFoundException;
 import com.prodready.social.posts.InvalidCursorException;
 import com.prodready.social.posts.PostAuthorMismatchException;
@@ -118,6 +119,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     body.setTitle("Not Found");
     body.setDetail("Author not found");
     return ResponseEntity.status(HttpStatus.NOT_FOUND)
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .body(body);
+  }
+
+  @ExceptionHandler(SelfFollowException.class)
+  ResponseEntity<ProblemDetail> handleSelfFollow(SelfFollowException ex) {
+    ProblemDetail body = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
+    body.setTitle("Bad Request");
+    body.setDetail(ex.getMessage());
+    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
         .contentType(MediaType.APPLICATION_PROBLEM_JSON)
         .body(body);
   }
