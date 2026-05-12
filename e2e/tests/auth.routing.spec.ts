@@ -45,3 +45,10 @@ test('authenticated user visiting /signup is redirected to /home', async ({
     page.getByRole('heading', { name: `Hello, ${input.displayName}` }),
   ).toBeVisible()
 })
+
+test('unauthenticated user visiting /home is redirected to /login', async ({ page }) => {
+  await page.goto('/home')
+
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole('heading', { name: 'Log in' })).toBeVisible()
+})
