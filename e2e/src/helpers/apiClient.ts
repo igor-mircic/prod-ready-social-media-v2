@@ -1,5 +1,6 @@
 import { getSignupUrl, getLoginUrl } from '../api/generated/auth-controller/auth-controller.ts'
 import {
+  getCreatePostUrl,
   getListPostsByAuthorUrl,
   getDeletePostUrl,
 } from '../api/generated/posts-controller/posts-controller.ts'
@@ -8,6 +9,8 @@ import type {
   UserResponse,
   LoginRequest,
   LoginResponse,
+  CreatePostRequest,
+  PostResponse,
   PostListResponse,
   ProblemDetail,
 } from '../api/generated/openAPIDefinition.schemas.ts'
@@ -27,6 +30,11 @@ export interface ListPostsByAuthorResult {
   body: PostListResponse | ProblemDetail
 }
 
+export interface CreatePostResult {
+  status: number
+  body: PostResponse | ProblemDetail
+}
+
 export interface DeletePostResult {
   status: number
   body: ProblemDetail | Record<string, never>
@@ -37,6 +45,7 @@ export interface ApiClient {
   signup(input: SignupRequest): Promise<SignupResult>
   login(input: LoginRequest): Promise<LoginResult>
   listPostsByAuthor(token: string, authorId: string): Promise<ListPostsByAuthorResult>
+  createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult>
   deletePost(token: string, postId: string): Promise<DeletePostResult>
 }
 
@@ -76,6 +85,20 @@ export function createApiClient(baseURL: string): ApiClient {
           Accept: 'application/json, application/problem+json',
           Authorization: `Bearer ${token}`,
         },
+      })
+      const text = await res.text()
+      const body = text.length > 0 ? JSON.parse(text) : {}
+      return { status: res.status, body }
+    },
+    async createPost(token: string, input: CreatePostRequest): Promise<CreatePostResult> {
+      const res = await fetch(`${baseURL}${getCreatePostUrl()}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, application/problem+json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(input),
       })
       const text = await res.text()
       const body = text.length > 0 ? JSON.parse(text) : {}
