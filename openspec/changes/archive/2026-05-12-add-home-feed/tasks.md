@@ -221,14 +221,14 @@
 
 ## 18. Full-suite smoke
 
-- [ ] 18.1 Run `./gradlew :backend:test` and confirm `FeedControllerIT` passes, the extended `PostsControllerIT` and `FollowsControllerIT` cases pass, and no existing IT regressed under the new migration / fanout invariants.
-- [ ] 18.2 Run `pnpm --dir frontend test` and confirm the new `FeedList.test.tsx`, the rewired `HomePage.test.tsx`, and the modified `PostCard` / `PostList` / `ProfilePage` tests all pass. Confirm no other `frontend/src/features/posts/*.test.tsx` files broke under the `PostCard` prop change.
-- [ ] 18.3 Run `pnpm --dir e2e test` on Chromium, Firefox, and WebKit. Confirm `feed.spec.ts` passes on all three. Confirm `axe.routes.spec.ts` still passes with the populated `/home` step. If the known `posts.composer.hardening` Firefox flake fires, re-run only.
+- [x] 18.1 Run `./gradlew :backend:test` and confirm `FeedControllerIT` passes, the extended `PostsControllerIT` and `FollowsControllerIT` cases pass, and no existing IT regressed under the new migration / fanout invariants.
+- [x] 18.2 Run `pnpm --dir frontend test` and confirm the new `FeedList.test.tsx`, the rewired `HomePage.test.tsx`, and the modified `PostCard` / `PostList` / `ProfilePage` tests all pass. Confirm no other `frontend/src/features/posts/*.test.tsx` files broke under the `PostCard` prop change.
+- [x] 18.3 Run `pnpm --dir e2e test` on Chromium, Firefox, and WebKit. Confirm `feed.spec.ts` passes on all three. Confirm `axe.routes.spec.ts` still passes with the populated `/home` step. If the known `posts.composer.hardening` Firefox flake fires, re-run only.
 
 ## 19. PR
 
-- [ ] 19.1 Open a PR titled `add-home-feed`. Body links to the proposal and design.
-- [ ] 19.2 Call out in the description:
+- [x] 19.1 Open a PR titled `add-home-feed`. Body links to the proposal and design.
+- [x] 19.2 Call out in the description:
   - (a) one new endpoint `GET /api/v1/feed`;
   - (b) one new migration `V5__create_feed_entries.sql` introducing a materialised, fanout-on-write feed table;
   - (c) write-side fanout invariants added to `PostService.create`, `PostService.delete`, `FollowService.follow`, `FollowService.unfollow` — all in their existing transactions;
