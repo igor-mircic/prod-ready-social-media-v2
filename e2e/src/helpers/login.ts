@@ -1,3 +1,4 @@
+import { expect, type Page } from '@playwright/test'
 import { getMeUrl } from '../api/generated/auth-controller/auth-controller.ts'
 import type { ApiClient, LoginResult } from './apiClient.ts'
 import type {
@@ -35,4 +36,17 @@ export async function loginViaApi(
     throw new Error(`loginViaApi: /me response missing id: ${JSON.stringify(me)}`)
   }
   return { accessToken, userId: me.id }
+}
+
+export async function loginAndLandOnHome(
+  page: Page,
+  input: { email: string; password: string; displayName: string },
+): Promise<void> {
+  await page.goto('/login')
+  await page.getByLabel('Email').fill(input.email)
+  await page.getByLabel('Password').fill(input.password)
+  await page.getByRole('button', { name: 'Log in' }).click()
+  await expect(
+    page.getByRole('heading', { name: `Hello, ${input.displayName}` }),
+  ).toBeVisible()
 }
