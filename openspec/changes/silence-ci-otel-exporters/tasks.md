@@ -1,13 +1,13 @@
 ## 1. CI — add the workflow-level env block
 
-- [ ] 1.1 In `.github/workflows/ci.yml`, add a top-level `env:` block (outside `jobs:`) immediately after the `on:` block. The block SHALL contain three keys: `OTEL_TRACES_EXPORTER: none`, `OTEL_METRICS_EXPORTER: none`, `OTEL_LOGS_EXPORTER: none`.
-- [ ] 1.2 Confirm the block is placed at the workflow root (sibling of `on:` and `jobs:`), not nested under a job — this guarantees inheritance by every step in every job per GitHub Actions env precedence.
-- [ ] 1.3 Add a short inline comment above the block linking to the design's reasoning (one line; keep the file readable).
+- [x] 1.1 In `.github/workflows/ci.yml`, add a top-level `env:` block (outside `jobs:`) immediately after the `on:` block. The block SHALL contain three keys: `OTEL_TRACES_EXPORTER: none`, `OTEL_METRICS_EXPORTER: none`, `OTEL_LOGS_EXPORTER: none`.
+- [x] 1.2 Confirm the block is placed at the workflow root (sibling of `on:` and `jobs:`), not nested under a job — this guarantees inheritance by every step in every job per GitHub Actions env precedence.
+- [x] 1.3 Add a short inline comment above the block linking to the design's reasoning (one line; keep the file readable).
 
 ## 2. CI — guardrails the spec calls out
 
-- [ ] 2.1 Confirm the workflow does NOT set `OTEL_SDK_DISABLED=true` anywhere (workflow env, job env, step env).
-- [ ] 2.2 Confirm no backend or e2e step passes `-Dotel.javaagent.enabled=false` on a JVM command line. The agent stays loaded; only its exporters are disabled.
+- [x] 2.1 Confirm the workflow does NOT set `OTEL_SDK_DISABLED=true` anywhere (workflow env, job env, step env).
+- [x] 2.2 Confirm no backend or e2e step passes `-Dotel.javaagent.enabled=false` on a JVM command line. The agent stays loaded; only its exporters are disabled.
 
 ## 3. CI — smoke against the empirical log
 

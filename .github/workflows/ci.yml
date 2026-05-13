@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+# Silence the OpenTelemetry Java agent's OTLP network exporters in
+# CI — no collector listens on localhost:4318 here, and the agent's
+# retry loop floods logs with `Failed to export spans /
+# ConnectException`. Agent stays loaded so trace.id / span.id MDC
+# keys remain populated. See openspec/changes/archive/
+# 2026-05-14-silence-ci-otel-exporters/design.md.
+env:
+  OTEL_TRACES_EXPORTER: none
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+
 jobs:
   backend:
     name: backend (test + openapi drift)
