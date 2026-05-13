@@ -11,10 +11,12 @@
   run-history greps still match and the run-summary line is
   unchanged.
 - [x] 1.3 Configure the action's inputs:
-  - `timeout_minutes: 5` — per-attempt timeout. Per `design.md`
-    Decision 2.
-  - `max_attempts: 3` — bounded retry count. Per `design.md`
-    Decision 3.
+  - `timeout_minutes: 10` — per-attempt timeout. Per `design.md`
+    Decision 2 (revised from 5 after PR #27 attempt 1 hit the
+    5-min cap on a slow-but-progressing firefox/webkit cold install).
+  - `max_attempts: 2` — bounded retry count. Per `design.md`
+    Decision 3 (revised from 3 to keep total budget 2×10=20min under
+    the 30-min job timeout).
   - `retry_on: any` — retry on both timeout and non-zero exit.
     Per `design.md` Decision 4.
   - `command: cd e2e && pnpm exec playwright install --with-deps

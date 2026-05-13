@@ -121,61 +121,70 @@ later. It does not foreclose either alternative. It is the minimum
 change that converts the failure mode from "30-minute silent stall"
 to "5-minute fast-retry."
 
-### Decision 2: 5-minute per-attempt timeout
+### Decision 2: 10-minute per-attempt timeout (revised from 5)
 
-**Choice:** `timeout_minutes: 5` on each attempt.
+**Choice:** `timeout_minutes: 10` on each attempt.
 
-**Why 5:** the normal cold path is `playwright install` downloading
-one browser (chromium 150 MB, firefox 95 MB, or webkit 65 MB; ~30–90
-seconds on the GitHub-hosted runner network) plus
-`apt-get update && apt-get install <30-or-so packages>` (~30–90
-seconds on a healthy mirror). Empirical numbers from prior green
-runs on this repo's PRs land in the 1m20s–2m40s range across the
-three shards. 5 minutes is ~2× the upper end of the happy-path
-distribution. Wide enough to absorb a slow-but-progressing mirror,
-tight enough that a true hang is killed quickly.
+**Original choice and why it was wrong:** the first draft of this
+design picked 5 minutes, on the assumption that empirical green
+runs landed in the 1m20s–2m40s range. PR #27 attempt 1 invalidated
+that assumption: firefox and webkit shards hit the 5-minute
+per-attempt timeout while `apt-get` was *actively downloading*
+(~48 MB of media-codec packages — `libcodec2-1.2`, `libavcodec60`,
+`fonts-wqy-zenhei`, etc.) from a slow Azure mirror. The download
+was making forward progress, just slowly. 5 minutes is not "~2×
+the happy-path upper bound" — it is right at the upper bound under
+adverse mirror conditions, which clips a substantial fraction of
+real runs.
 
-**Why not 3:** would clip the upper tail of the happy path under
-adverse-but-still-recovering network conditions, increasing false-
-positive retries. The retry is cheap (the cache restore for
-attempt 2 is instant once binaries are present from attempt 1's
-partial work) but unnecessary retries pollute the run log.
+**Why 10:** absorbs the slow-but-still-progressing case that 5
+minutes did not. A 48-MB apt fetch at the observed throttled rate
+(~150 KB/s mid-run) needs ~5 minutes just for the download phase;
+add unpack/configure on top and the cold path on firefox/webkit
+realistically runs 6–8 minutes on a slow day. 10 minutes leaves
+2 minutes of headroom over that.
 
-**Why not 10:** the value of a tight per-attempt timeout *is* fast
-failure. A 10-minute attempt followed by two retries is a 30-minute
-worst case — i.e., back at the original cliff with no headroom for
-the actual tests.
+**Why not 8:** 8 × 2 = 16 minute budget fits comfortably, but the
+2-minute headroom over the observed 6–8 minute slow-path is the
+margin that prevents repeat false-positive timeouts. Spending
+an extra 4 minutes of worst-case budget (20 vs 16) for that margin
+is worth it — see Decision 3.
 
-**Trade-off:** a one-off legitimate cold install that crosses 5
-minutes (e.g., GitHub's CDN throttling a single shard) will trigger
-a needless retry. Acceptable. The retry is itself bounded and idempotent.
+**Why not 15:** the value of a tight per-attempt timeout *is* fast
+failure. With `max_attempts: 2` (see Decision 3), 15 × 2 = 30
+minutes equals the job timeout, leaving zero headroom for tests.
 
-### Decision 3: 3 attempts total (max_attempts)
+**Trade-off:** a true mirror hang now takes 10 minutes per attempt
+to detect instead of 5. Acceptable because the bounded retry runs
+*one* more attempt after that, vs. the original 30-minute cliff
+which yielded zero retries.
 
-**Choice:** `max_attempts: 3`.
+### Decision 3: 2 attempts total (revised from 3)
 
-**Why 3:** total worst-case install budget = 3 × 5 = 15 minutes.
-That fits inside the 30-minute job timeout with 15 minutes left for
-the Playwright suite to run, which is comfortably above the suite's
-observed worst-case duration (~6–8 minutes for a full shard
-including the harness's globalSetup). Two attempts would also fit,
-but a back-to-back transient mirror issue on attempts 1 and 2 — not
-implausible during a GitHub Actions network event — would burn the
-entire budget on bad luck. Three attempts has roughly one extra
-chance for free.
+**Choice:** `max_attempts: 2`.
 
-**Why not 5:** diminishing returns, and a noisier signal. If
-attempt 4 is needed, the underlying network event is the wrong
-shape for retry to fix — the right response is to fail loudly and
-let a human re-run later. Five-attempt loops also tempt readers to
-treat the install step as fundamentally flaky, which it is not on
-the happy path.
+**Original choice and why it was revised:** the first draft picked
+3, paired with 5-minute attempts, for a 15-minute total budget.
+Revising Decision 2 to 10 minutes per attempt forced a paired
+revision here: 3 × 10 = 30 minutes equals the job timeout, leaving
+no room for tests. Dropping to 2 attempts gives a 20-minute total
+install budget and preserves 10 minutes of headroom for the
+Playwright suite (which runs in 6–8 minutes per shard, comfortably
+under the headroom).
 
-**Trade-off:** in the very narrow regime of "three consecutive
-attempts all hit transient apt failures," CI will fail and require
-a human re-run. That is the same outcome as today, just reached in
-~15 minutes instead of 30, with three diagnostic attempt-logs to
-inspect.
+**Why 2 is enough:** the cases retry meaningfully covers are
+*transient* — a single mirror flake on one attempt followed by a
+healthy mirror on the next is exactly the recovery pattern we
+want. The case 3 attempts would have caught — two consecutive
+flakes followed by a healthy third — is rarer and, in the rare
+runs where it does occur, a human re-run of the workflow
+recovers it. We pay 20 minutes of CI time on a true triple-failure
+day instead of 30; the trade is acceptable.
+
+**Trade-off:** in the narrow regime of "two consecutive attempts
+both hit transient apt failures," CI fails and requires a human
+re-run. Outcome matches pre-change behaviour, reached at ~20
+minutes instead of 30, with two diagnostic attempt-logs to inspect.
 
 ### Decision 4: Retry on any failure, not just timeout
 
@@ -265,6 +274,32 @@ the cwd to find `node_modules/.bin/playwright`.
   spend, and an outer `timeout-minutes` on the same step would
   double the budget. Cheap to revisit if the action's behaviour
   ever surprises us.
+- **`nick-fields/retry@v3` cannot kill a sudo'd child** —
+  empirically observed on PR #27 attempt 1: when the action's
+  per-attempt timeout fired on a slow `apt-get`, the action's
+  Node process tried to `process.kill(pid, SIGTERM)` on a sudo'd
+  apt process (real-UID=root after `setuid(0)`) and crashed with
+  `kill EPERM` instead of starting the retry. Net effect: timeout
+  *is* respected (the step does end at the per-attempt cap), but
+  no retry happens — only a single attempt runs before the action
+  errors out. Implications:
+  - The "killed and retried" scenario in the spec delta is only
+    satisfied for non-sudo failure modes (e.g., a non-zero exit
+    from `playwright install` itself, or a hang on a non-sudo'd
+    child). For a sudo'd `apt-get` hang, the per-attempt cap fires
+    once and the step fails — strictly better than the 30-minute
+    cliff (which is the goal of the change) but worse than the
+    ideal multi-attempt recovery.
+  - The conservative mitigation in this change (10-min ceiling)
+    is sufficient for the observed failure mode (slow-but-
+    progressing mirror, no actual hang). If true `apt-get` hangs
+    recur and the lack of retry on that path becomes a problem,
+    the follow-up is to split the install into two steps:
+    `playwright install <browser>` (user-owned, retry-action-wrapped)
+    and `playwright install-deps <browser>` (sudo'd, wrapped in a
+    shell `for` loop with `sudo timeout --kill-after=...` so the
+    kill signal originates as root and can reach the root child).
+    Recorded under Decision 5 as a deferred path.
 
 ## Risks
 
