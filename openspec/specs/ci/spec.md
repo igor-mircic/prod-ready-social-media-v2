@@ -180,20 +180,107 @@ The e2e job's pnpm version SHALL be sourced from the `packageManager` field of `
 - **THEN** it reads the pnpm version from `e2e/package.json`'s `packageManager` field
 - **AND** it does NOT receive a literal `version:` input in the workflow YAML.
 
+### Requirement: e2e job runs inside the official Playwright container, version-pinned to `@playwright/test`
+
+The e2e job in `.github/workflows/ci.yml` SHALL declare a `container:`
+block whose `image` is `mcr.microsoft.com/playwright:v<X.Y.Z>-noble`
+where `<X.Y.Z>` matches the `@playwright/test` version pinned in
+`e2e/pnpm-lock.yaml`. The `-noble` suffix MUST match the Ubuntu base of
+the workflow's runner (`ubuntu-latest`). The workflow SHALL include a
+fail-fast step that compares the image tag against the
+`@playwright/test` version installed in `e2e/pnpm-lock.yaml` and exits
+non-zero on mismatch, so the two-source-of-truth pin cannot drift
+silently. The e2e job SHALL NOT execute a `playwright install-deps`
+step — the container ships every system library the three browsers
+need at runtime.
+
+#### Scenario: e2e job declares the version-pinned container
+
+- **WHEN** a reader opens `.github/workflows/ci.yml`
+- **THEN** the `e2e` job declares a `container:` block
+- **AND** the `image` value is `mcr.microsoft.com/playwright:v<X.Y.Z>-noble`
+  where `<X.Y.Z>` equals the `@playwright/test` version pinned in
+  `e2e/pnpm-lock.yaml`.
+
+#### Scenario: Drift between the container tag and `@playwright/test` fails the workflow
+
+- **WHEN** the workflow tag of the Playwright container image does not
+  match the `@playwright/test` version in `e2e/pnpm-lock.yaml`
+- **THEN** the fail-fast step in the e2e job exits non-zero
+- **AND** the e2e job fails before Playwright tests are invoked
+- **AND** the run log shows both the image tag and the
+  `@playwright/test` version that disagreed.
+
+#### Scenario: No `playwright install-deps` step exists
+
+- **WHEN** a reader inspects the e2e job's step list
+- **THEN** no step invokes `playwright install-deps` (with or without
+  a `sudo` wrapper)
+- **AND** no step uses the `for attempt in 1 2; do sudo --preserve-env=PATH timeout …`
+  shell pattern that the previous workflow used to retry that step.
+
+#### Scenario: Container ships the browser binaries the matrix shard runs
+
+- **WHEN** the e2e job runs a matrix shard (chromium, firefox, or
+  webkit) and the container tag matches `@playwright/test`
+- **THEN** the browser binary for that shard is already present in
+  the container's `~/.cache/ms-playwright` (or equivalent path)
+- **AND** the retained `playwright install ${{ matrix.browser }}`
+  step is effectively a no-op (Playwright reports the browser as
+  already installed).
+
 ### Requirement: e2e job has Docker available so Testcontainers can boot Postgres
 
-The e2e job SHALL run on a runner where Docker is available (e.g., `ubuntu-latest`, which includes Docker by default). The job SHALL NOT install or rely on a separate Postgres service container declared via the workflow's `services:` block — it SHALL let the Playwright `globalSetup` provision Postgres via Testcontainers.
+The e2e job SHALL run on a runner where Docker is available (e.g.,
+`ubuntu-latest`, which includes Docker by default). The job SHALL NOT
+install or rely on a separate Postgres service container declared via
+the workflow's `services:` block — it SHALL let the Playwright
+`globalSetup` provision Postgres via Testcontainers.
+
+When the e2e job runs inside a container (see the
+"e2e job runs inside the official Playwright container" requirement
+above), the host's Docker socket SHALL be bind-mounted into the
+container via the container's `options:` field (e.g.,
+`options: --volume /var/run/docker.sock:/var/run/docker.sock`), so the
+Testcontainers client inside the e2e container can talk to the host's
+Docker daemon and spawn the Postgres container as a sibling of the
+e2e container. The spawned Postgres container SHALL be reachable from
+the e2e container at the Testcontainers-assigned host port via the
+host's loopback interface (the same way Testcontainers exposes
+container ports on a non-containerised runner). The e2e job SHALL
+NOT configure a nested Docker-in-Docker daemon — only the
+socket-mount sibling-container pattern is in scope.
 
 #### Scenario: e2e job runs on a Docker-capable runner
 
 - **WHEN** a reader opens the `e2e` job definition
-- **THEN** `runs-on` is a runner that ships with Docker available (e.g., `ubuntu-latest`).
+- **THEN** `runs-on` is a runner that ships with Docker available
+  (e.g., `ubuntu-latest`).
 
 #### Scenario: No Postgres service container is declared in the workflow
 
 - **WHEN** a reader inspects the `e2e` job
-- **THEN** the job has no `services:` block declaring a Postgres container
-- **AND** Postgres provisioning is delegated entirely to the harness's `globalSetup`.
+- **THEN** the job has no `services:` block declaring a Postgres
+  container
+- **AND** Postgres provisioning is delegated entirely to the
+  harness's `globalSetup`.
+
+#### Scenario: Docker socket is mounted into the e2e container
+
+- **WHEN** a reader inspects the e2e job's `container:` block
+- **THEN** the `options:` field includes a bind-mount of
+  `/var/run/docker.sock` from host to container.
+
+#### Scenario: Testcontainers Postgres is reachable from inside the e2e container
+
+- **WHEN** the harness's `globalSetup` calls Testcontainers to spawn
+  Postgres while the e2e job runs inside the Playwright container
+- **THEN** Testcontainers spawns the Postgres container via the
+  host's Docker daemon (sibling of the e2e container)
+- **AND** the harness reaches Postgres at the host's loopback on
+  the Testcontainers-assigned port
+- **AND** the harness completes its Flyway migrations and seed
+  fixtures before the first Playwright test runs.
 
 ### Requirement: Backend job caches Gradle dependencies
 
@@ -225,64 +312,106 @@ The backend job SHALL cache Gradle home (`~/.gradle/caches`, `~/.gradle/notifica
 
 ### Requirement: E2E job caches Playwright browser binaries per matrix shard
 
-The e2e job SHALL include an `actions/cache@v4` step that caches `~/.cache/ms-playwright`, scheduled before the Playwright install steps. The cache key SHALL include the matrix browser name and a hash of `e2e/pnpm-lock.yaml`, with a `restore-keys` prefix that omits the lockfile hash so partial hits are possible. The Playwright install MAY be expressed either as a single `playwright install --with-deps ${{ matrix.browser }}` step or as two separate steps (`playwright install ${{ matrix.browser }}` for the browser binaries, followed by `playwright install-deps ${{ matrix.browser }}` for the apt system packages); in either form the install SHALL run unconditionally — the browser-binary half is a no-op when binaries are present, and the apt-system-packages half is still needed because those packages are not covered by the cache. Every install step SHALL run inside a bounded retry wrapper that imposes a per-attempt timeout strictly less than the e2e job's `timeout-minutes`, retries on any non-success outcome (both per-attempt timeout and non-zero exit, because both shapes are caused by transient apt-mirror or CDN conditions and the install commands are idempotent), and bounds `max_attempts` such that the sum of `per_attempt_timeout × max_attempts` across all install steps remains strictly less than the e2e job's `timeout-minutes`. The retry wrapper for any install step that escalates to root via `sudo` (e.g., the apt-system-packages step) MUST be capable of terminating root-owned child processes — typically a shell `for` loop with `sudo timeout`, because Node-based wrapper actions running as the non-root runner user crash with `EPERM` when their per-attempt timeout fires on a sudo-escalated child and therefore cannot deliver true retry-on-hang semantics for those steps. The cache step itself SHALL NOT be wrapped or retried.
+The e2e job SHALL include an `actions/cache@v4` step that caches
+`~/.cache/ms-playwright`, scheduled before any Playwright install
+step that may run inside the job. The cache key SHALL include the
+matrix browser name and a hash of `e2e/pnpm-lock.yaml`, with a
+`restore-keys` prefix that omits the lockfile hash so partial hits
+are possible. When the e2e job runs inside the official Playwright
+container (see the "e2e job runs inside the official Playwright
+container" requirement above), the cache step is a defence-in-depth
+surface for the rare drift case where the container's bundled
+browser binaries do not match the `@playwright/test` version pinned
+in `e2e/pnpm-lock.yaml`; on a clean pin the cache is unused. The
+job SHALL include a `playwright install ${{ matrix.browser }}` step
+that runs unconditionally (a no-op when the container's binaries
+already match the pin; reconciles via the cache or downloads
+otherwise). The `playwright install` step SHALL be wrapped in a
+bounded `nick-fields/retry@v3` invocation with `timeout_minutes`
+strictly less than the e2e job's `timeout-minutes`, `max_attempts`
+chosen so the cumulative wall-clock budget across attempts remains
+strictly less than the e2e job's `timeout-minutes`, and
+`retry_on: any` to cover both transient hangs and non-zero exits.
+The `playwright install` step SHALL NOT escalate to root via
+`sudo`. The cache step itself SHALL NOT be wrapped or retried.
 
-#### Scenario: Cache restores browser binaries on a hit
+#### Scenario: Cache step is present and keyed per matrix shard
 
-- **WHEN** the e2e job runs a matrix shard for which a cache entry exists under `playwright-<os>-<browser>-<lockfile-hash>`
-- **THEN** `~/.cache/ms-playwright` is restored before `playwright install` runs
-- **AND** `playwright install --with-deps ${{ matrix.browser }}` completes without re-downloading the browser binaries.
+- **WHEN** a reader inspects the e2e job
+- **THEN** the job declares an `actions/cache@v4` step whose `path`
+  is `~/.cache/ms-playwright`
+- **AND** the cache `key` includes `${{ matrix.browser }}` and the
+  hash of `e2e/pnpm-lock.yaml`
+- **AND** the `restore-keys` includes a prefix that omits the
+  lockfile hash.
 
-#### Scenario: Lockfile change re-keys but partial hit still helps
+#### Scenario: Clean pin — cache step is a no-op, no download runs
 
-- **WHEN** `e2e/pnpm-lock.yaml` changes but a previous cache entry exists under the same `playwright-<os>-<browser>-` prefix
-- **THEN** the cache step restores the most recent matching entry via `restore-keys`
-- **AND** `playwright install` reconciles any missing or outdated binaries
-- **AND** the job saves a fresh cache entry under the new lockfile-hashed key.
+- **WHEN** the e2e job runs a matrix shard with the container tag
+  matching `@playwright/test`
+- **THEN** the `playwright install ${{ matrix.browser }}` step
+  reports the browser as already installed
+- **AND** no browser binary is downloaded from the CDN.
 
-#### Scenario: Per-browser keys avoid cross-shard cache collisions
+#### Scenario: Drifted pin — cache restore covers the gap
 
-- **WHEN** the e2e matrix runs chromium, firefox, and webkit shards in parallel
-- **THEN** each shard uses a distinct cache key that includes its `matrix.browser` value
-- **AND** the three shards do not race to save under a shared key.
+- **WHEN** the e2e job runs a matrix shard where the container tag
+  is older than the `@playwright/test` version pinned in
+  `e2e/pnpm-lock.yaml`, and a cache entry under
+  `playwright-<os>-<browser>-<lockfile-hash>` exists
+- **THEN** the cache step restores the cached binaries before
+  `playwright install` runs
+- **AND** `playwright install ${{ matrix.browser }}` reconciles
+  from the cache without a fresh CDN download.
 
-#### Scenario: Cold cache still passes
+#### Scenario: Cold cache during drift — `playwright install` downloads
 
-- **WHEN** the e2e job runs for the first time after this change merges (no cache entry yet)
-- **THEN** the cache step records a miss without failing the job
-- **AND** `playwright install --with-deps ${{ matrix.browser }}` downloads the browser as before
-- **AND** the cache step saves a new entry at the end of the job.
+- **WHEN** the e2e job runs with a drifted pin and no matching
+  cache entry exists
+- **THEN** `playwright install ${{ matrix.browser }}` downloads
+  the missing browser binary
+- **AND** the cache step saves a fresh entry under the new
+  lockfile-hashed key at the end of the job.
 
-#### Scenario: Every install step has a per-attempt timeout strictly less than the job timeout
+#### Scenario: `playwright install` step has a per-attempt timeout strictly less than the job timeout
 
-- **WHEN** a reader inspects any Playwright install step in `.github/workflows/ci.yml` (whether the single `--with-deps` form or either of the split binaries/deps steps)
-- **THEN** the step is wrapped in a retry mechanism that declares a per-attempt timeout
-- **AND** that per-attempt timeout is strictly less than the e2e job's `timeout-minutes`
-- **AND** the per-attempt timeout is large enough to absorb a normal cold run of that step on this repo's matrix (empirically, browser-binaries fit in under 3 minutes; apt-system-packages can require up to ~10 minutes on a slow mirror).
+- **WHEN** a reader inspects the e2e job's `playwright install`
+  step
+- **THEN** the step is wrapped in `nick-fields/retry@v3` with
+  `timeout_minutes` strictly less than the e2e job's
+  `timeout-minutes`
+- **AND** `max_attempts` is bounded so the cumulative budget
+  (`timeout_minutes × max_attempts`) is strictly less than the
+  e2e job's `timeout-minutes`
+- **AND** the step does NOT invoke `sudo`.
 
-#### Scenario: A hanging install attempt is killed and retried
+#### Scenario: Hanging install attempt is killed and retried
 
-- **WHEN** an install attempt hangs (e.g., apt-get is blocked on an unreachable mirror) and exceeds the per-attempt timeout
-- **THEN** the retry wrapper kills the attempt at its per-attempt timeout (using `sudo timeout` for steps that escalate to root, so the kill signal can reach root-owned children)
+- **WHEN** a `playwright install` attempt hangs (e.g., CDN
+  unresponsive on a cold-cache download) and exceeds the
+  per-attempt timeout
+- **THEN** the retry wrapper kills the attempt at its
+  per-attempt timeout
 - **AND** the wrapper starts a fresh attempt
-- **AND** the job does NOT reach the e2e job's `timeout-minutes` cliff on the install step.
-
-#### Scenario: Total install budget is bounded under the job timeout
-
-- **WHEN** every install step runs all of its `max_attempts` to their per-attempt timeout
-- **THEN** the cumulative wall-clock time spent across all install steps is strictly less than the e2e job's `timeout-minutes`
-- **AND** there is remaining time in the job budget for Playwright tests to execute when a subsequent attempt succeeds.
+- **AND** the job does NOT reach the e2e job's
+  `timeout-minutes` cliff on the install step.
 
 #### Scenario: Retry covers both hangs and non-zero exits
 
-- **WHEN** an install attempt exits non-zero from a transient failure (e.g., apt `Failed to fetch …`, `Hash sum mismatch`, or a CDN-side TLS reset on the binary download) without exceeding the per-attempt timeout
+- **WHEN** a `playwright install` attempt exits non-zero from a
+  transient failure (e.g., CDN-side TLS reset on the binary
+  download) without exceeding the per-attempt timeout
 - **THEN** the retry wrapper starts a fresh attempt
-- **AND** the wrapper does NOT treat the non-zero exit as a permanent failure on the first attempt.
+- **AND** the wrapper does NOT treat the non-zero exit as a
+  permanent failure on the first attempt.
 
 #### Scenario: Persistent failure surfaces a clear error after the bounded attempt count
 
-- **WHEN** every attempt up to `max_attempts` fails (timeout or non-zero exit on each) for some install step
-- **THEN** that install step fails the e2e job
-- **AND** the run log shows one log section per attempt with each attempt's stderr
-- **AND** the job did not silently wait out the job-level `timeout-minutes`.
+- **WHEN** every attempt up to `max_attempts` fails (timeout or
+  non-zero exit on each) for the `playwright install` step
+- **THEN** the install step fails the e2e job
+- **AND** the run log shows one log section per attempt with
+  each attempt's stderr
+- **AND** the job did not silently wait out the job-level
+  `timeout-minutes`.
 
