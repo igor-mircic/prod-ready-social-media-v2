@@ -83,6 +83,51 @@ docker-compose --profile observability up -d prometheus grafana
 Anonymous viewer access is for local development only — production would gate
 the dashboard behind OIDC or basic auth.
 
+### Structured logs
+
+The backend emits one Elastic Common Schema (ECS) JSON object per log event on
+stdout (Spring Boot's native `logging.structured.format.console: ecs`), so a
+local `bootRun` already produces the same shape a log shipper would index in
+production. Every line carries `@timestamp`, `log.level`, `service.name`,
+`service.environment`, `process.thread.name`, `log.logger`, `message`, and
+`ecs.version`; per-request lines additionally carry `request.id` (and
+`user.id` once Spring Security has authenticated the caller).
+
+Each HTTP request emits exactly one access-log line on `event.dataset=backend.access`
+summarising method, route template, status, and duration:
+
+```json
+{"@timestamp":"2026-05-13T14:00:00Z","log":{"level":"INFO","logger":"backend.access"},
+ "service":{"name":"backend","environment":"local"},"process":{"thread":{"name":"http-nio-8080-exec-1"}},
+ "event":{"dataset":"backend.access","duration":3241000},"http":{"request":{"method":"GET"},
+ "response":{"status_code":200}},"url":{"path":"/api/v1/auth/me"},"duration_ms":3,
+ "request":{"id":"7d7c2e8e-1b1a-4d2f-8a4f-9bb6f9c1c0a1"},"user":{"id":"…"},
+ "message":"","ecs":{"version":"8.11"}}
+```
+
+`/actuator/health` and `/actuator/prometheus` are deliberately skipped so the
+per-15-second Prometheus scrape does not flood the log.
+
+Each response carries the correlation id back to the client as `X-Request-Id`,
+and the filter honours an inbound `X-Request-Id` header verbatim if the caller
+already issued one (so an upstream proxy's id wins):
+
+```sh
+curl -i -H 'X-Request-Id: my-correlation-id' http://localhost:8080/api/v1/auth/me
+# < HTTP/1.1 401
+# < X-Request-Id: my-correlation-id
+```
+
+Grep one request's lifetime out of `bootRun` stdout with `jq`:
+
+```sh
+./gradlew :backend:bootRun 2>&1 | jq -c 'select(.request.id == "my-correlation-id")'
+```
+
+`trace.id` and `span.id` slots are reserved by the ECS formatter and will start
+populating once the slice-3 (distributed tracing) change lands; until then they
+are simply absent from each line.
+
 ## Prerequisites
 
 - Java 21
