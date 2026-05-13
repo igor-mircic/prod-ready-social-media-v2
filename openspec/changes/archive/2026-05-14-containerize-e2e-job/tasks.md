@@ -19,8 +19,8 @@
 
 ## 4. CI — verify Testcontainers Postgres still works under the container
 
-- [ ] 4.1 Open the e2e job's pull request; confirm the matrix shard runs reach the `globalSetup` Testcontainers Postgres provisioning step and the Flyway migrations complete before the first Playwright test runs.
-- [ ] 4.2 If the first run fails with a Docker permission denied on `/var/run/docker.sock`, add `options: --user root --volume /var/run/docker.sock:/var/run/docker.sock` to the container configuration and re-run. Record the working form in the workflow YAML.
+- [x] 4.1 Open the e2e job's pull request; confirm the matrix shard runs reach the `globalSetup` Testcontainers Postgres provisioning step and the Flyway migrations complete before the first Playwright test runs.
+- [x] 4.2 If the first run fails with a Docker permission denied on `/var/run/docker.sock`, add `options: --user root --volume /var/run/docker.sock:/var/run/docker.sock` to the container configuration and re-run. Record the working form in the workflow YAML.
 - [x] 4.3 Confirm no `services:` Postgres block is added or implied; Testcontainers SHALL remain the sole provisioner.
 
 ## 5. Documentation
@@ -29,13 +29,13 @@
 
 ## 6. CI — smoke and observability
 
-- [ ] 6.1 Push the change to a feature branch; observe the three matrix legs (chromium, firefox, webkit) on the resulting CI run.
-- [ ] 6.2 Confirm the `Install Playwright system deps` step is absent in every leg's log.
-- [ ] 6.3 Confirm the `Install Playwright browser binaries` step reports "already installed" (or equivalent no-op) on every leg's log when the pin is clean.
-- [ ] 6.4 Confirm the webkit leg's wall-clock drops by approximately the duration that `playwright install-deps` previously consumed (empirically ~2 minutes on this repo).
-- [ ] 6.5 Confirm the harness's Testcontainers Postgres provisioning completes in every leg before the first test runs; check the legs' summary view for the Flyway migration log lines.
+- [x] 6.1 Push the change to a feature branch; observe the three matrix legs (chromium, firefox, webkit) on the resulting CI run.
+- [x] 6.2 Confirm the `Install Playwright system deps` step is absent in every leg's log.
+- [x] 6.3 Confirm the `Install Playwright browser binaries` step reports "already installed" (or equivalent no-op) on every leg's log when the pin is clean.
+- [x] 6.4 Confirm the webkit leg's wall-clock drops by approximately the duration that `playwright install-deps` previously consumed (empirically ~2 minutes on this repo).
+- [x] 6.5 Confirm the harness's Testcontainers Postgres provisioning completes in every leg before the first test runs; check the legs' summary view for the Flyway migration log lines.
 
 ## 7. OpenSpec hygiene
 
-- [ ] 7.1 Run `openspec validate containerize-e2e-job --strict` and resolve any failures.
-- [ ] 7.2 Confirm `git status` shows only `.github/workflows/ci.yml` (and any inline `e2e/README.md` clarification, if 5.1 produced one) modified — no incidental edits.
+- [x] 7.1 Run `openspec validate containerize-e2e-job --strict` and resolve any failures.
+- [x] 7.2 Confirm `git status` shows only `.github/workflows/ci.yml` (and any inline `e2e/README.md` clarification, if 5.1 produced one) modified — no incidental edits.
