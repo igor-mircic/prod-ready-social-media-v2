@@ -146,6 +146,7 @@ jobs:
 
       - name: Assert container image tag matches @playwright/test
         working-directory: e2e
+        shell: bash
         run: |
           set -euo pipefail
           LOCK_VERSION="$(grep -oE "'@playwright/test@[0-9]+\.[0-9]+\.[0-9]+'" pnpm-lock.yaml | head -1 | sed -E "s/'@playwright\\/test@([0-9.]+)'/\\1/")"
