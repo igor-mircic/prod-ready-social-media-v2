@@ -66,6 +66,23 @@ The per-endpoint contract lives in `openapi/openapi.json`; the generated
 TanStack Query hooks under `frontend/src/api/generated/queries/posts-controller/`
 are the source of truth for how the SPA calls those endpoints.
 
+## Local observability
+
+The backend exposes Prometheus-format metrics at `/actuator/prometheus`; an
+opt-in compose profile brings up a local Prometheus + Grafana to scrape and
+visualise them.
+
+```sh
+docker-compose --profile observability up -d prometheus grafana
+```
+
+- Grafana: `http://localhost:3000` (anonymous viewer access; lands directly on
+  the provisioned `Backend overview` dashboard).
+- Prometheus: `http://localhost:9090`.
+
+Anonymous viewer access is for local development only — production would gate
+the dashboard behind OIDC or basic auth.
+
 ## Prerequisites
 
 - Java 21

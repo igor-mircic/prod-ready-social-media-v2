@@ -7,6 +7,9 @@
 #
 # Start with: docker-compose up -d postgres
 #
+# Opt-in observability stack (Prometheus + Grafana, default off):
+#   docker-compose --profile observability up -d prometheus grafana
+#
 # Credentials below match the backend's default Spring profile in
 # backend/src/main/resources/application.yaml. Override either side via the
 # usual SPRING_DATASOURCE_* env vars when running the backend.
@@ -27,6 +30,31 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: social-prometheus
+    profiles: ["observability"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: social-grafana
+    profiles: ["observability"]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
 volumes:
   postgres-data:

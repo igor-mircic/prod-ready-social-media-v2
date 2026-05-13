@@ -19,6 +19,10 @@ public class SecurityConfig {
 
   static final String[] PERMIT_ALL_GETS = {
     "/actuator/health",
+    // TODO(prod): in production, run actuator on management.server.port and remove these
+    // allowlist entries.
+    "/actuator/info",
+    "/actuator/prometheus",
     "/v3/api-docs",
     "/v3/api-docs/**",
     "/swagger-ui",
