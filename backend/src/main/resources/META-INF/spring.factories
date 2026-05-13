@@ -1,0 +1,5 @@
+# Structured-log JSON customizers are loaded by StructuredLogFormatterFactory
+# via SpringFactoriesLoader during Logback initialization, which happens BEFORE
+# the Spring application context exists. Registering via @Component would be
+# too late - the customizer must be wired through this SPI file.
+org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer=com.prodready.social.observability.EcsTraceFieldsCustomizer

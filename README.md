@@ -73,12 +73,14 @@ opt-in compose profile brings up a local Prometheus + Grafana to scrape and
 visualise them.
 
 ```sh
-docker-compose --profile observability up -d prometheus grafana
+docker-compose --profile observability up -d
 ```
 
 - Grafana: `http://localhost:3000` (anonymous viewer access; lands directly on
   the provisioned `Backend overview` dashboard).
 - Prometheus: `http://localhost:9090`.
+- Tempo: `http://localhost:3200` (queried via the Grafana `Tempo` datasource,
+  no standalone UI).
 
 Anonymous viewer access is for local development only — production would gate
 the dashboard behind OIDC or basic auth.
@@ -124,9 +126,52 @@ Grep one request's lifetime out of `bootRun` stdout with `jq`:
 ./gradlew :backend:bootRun 2>&1 | jq -c 'select(.request.id == "my-correlation-id")'
 ```
 
-`trace.id` and `span.id` slots are reserved by the ECS formatter and will start
-populating once the slice-3 (distributed tracing) change lands; until then they
-are simply absent from each line.
+### Distributed tracing
+
+The backend attaches the [OpenTelemetry Java agent](https://opentelemetry.io/docs/zero-code/java/agent/)
+to every JVM entry point (`bootRun`, the `bootJar` launcher used by the e2e
+harness, and the integration-test JVM). The agent auto-instruments Spring MVC,
+HikariCP, JDBC, the slice-1 `@Timed` business methods, and any future outbound
+HTTP, emitting one span per call. The same compose profile that brings up
+Prometheus and Grafana now also brings up [Tempo](https://grafana.com/oss/tempo/)
+as the local span store:
+
+```sh
+docker-compose --profile observability up -d
+```
+
+Spans flow from the agent to Tempo at `http://localhost:4318` over OTLP/HTTP
+(no separate OpenTelemetry Collector — the agent ships direct for now;
+slice 4 introduces the collector alongside Loki for log shipping).
+
+Every request log line now carries populated `trace.id` and `span.id` ECS
+fields. The MDC keys the agent populates (Logstash-style `trace_id`,
+`span_id`, `trace_flags`) are remapped to ECS-canonical nested keys by
+`EcsTraceFieldsCustomizer` so each line uses exactly one naming convention:
+
+```json
+{"@timestamp":"2026-05-13T14:00:00Z","log":{"level":"INFO","logger":"backend.access"},
+ "service":{"name":"backend","environment":"local"},"process":{"thread":{"name":"http-nio-8080-exec-1"}},
+ "event":{"dataset":"backend.access","duration":3241000},"http":{"request":{"method":"GET"},
+ "response":{"status_code":200}},"url":{"path":"/api/v1/auth/me"},"duration_ms":3,
+ "request":{"id":"7d7c2e8e-1b1a-4d2f-8a4f-9bb6f9c1c0a1"},"user":{"id":"…"},
+ "trace":{"id":"a3c1f4e2b7d8c9106e5a4b3c2d1e0f9a","flags":"01"},
+ "span":{"id":"b2c3d4e5f6071829"},
+ "message":"","ecs":{"version":"8.11"}}
+```
+
+Manual log-to-trace correlation today is a copy-paste:
+
+1. `jq -c 'select(.url.path == "/api/v1/auth/me")'` over `bootRun` stdout to
+   find the request's access-log line.
+2. Copy the value of `trace.id`.
+3. Open Grafana at `http://localhost:3000`, switch the explore datasource to
+   `Tempo`, paste the trace id into the search box, hit run — the span tree
+   for that request renders.
+
+The auto-link (click `trace.id` in a log line, jump to Tempo) lands in slice
+4 once Loki is provisioned as the log datasource — Grafana's `tracesToLogs`
+correlation block needs a log datasource to point at.
 
 ## Prerequisites
 
