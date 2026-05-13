@@ -110,6 +110,18 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Keep this in lockstep with `container.image` below. The
+      # `Assert container image tag matches @playwright/test` step
+      # fails the job if this drifts from the `@playwright/test`
+      # version pinned in `e2e/pnpm-lock.yaml`.
+      PLAYWRIGHT_VERSION: 1.59.1
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
+      # Bind-mount the host Docker socket so the harness's
+      # `globalSetup` can spawn a Testcontainers Postgres as a
+      # sibling of this container (sibling-container DinD pattern).
+      options: --volume /var/run/docker.sock:/var/run/docker.sock
     strategy:
       fail-fast: false
       matrix:
@@ -131,6 +143,21 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: e2e/pnpm-lock.yaml
+
+      - name: Assert container image tag matches @playwright/test
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          LOCK_VERSION="$(grep -oE "'@playwright/test@[0-9]+\.[0-9]+\.[0-9]+'" pnpm-lock.yaml | head -1 | sed -E "s/'@playwright\\/test@([0-9.]+)'/\\1/")"
+          if [ -z "${LOCK_VERSION}" ]; then
+            echo "::error::Could not resolve @playwright/test version from e2e/pnpm-lock.yaml"
+            exit 1
+          fi
+          if [ "${LOCK_VERSION}" != "${PLAYWRIGHT_VERSION}" ]; then
+            echo "::error::Drift: container image tag is v${PLAYWRIGHT_VERSION}-noble but e2e/pnpm-lock.yaml pins @playwright/test@${LOCK_VERSION}. Update container.image tag and PLAYWRIGHT_VERSION env var together, or update the @playwright/test pin."
+            exit 1
+          fi
+          echo "OK: container image and @playwright/test both at ${LOCK_VERSION}"
 
       - name: Download backend JAR
         uses: actions/download-artifact@v4
@@ -160,31 +187,13 @@ jobs:
           restore-keys: |
             playwright-${{ runner.os }}-${{ matrix.browser }}-
 
-      - name: Install Playwright browser binaries (${{ matrix.browser }})
+      - name: Reconcile Playwright browser binaries (defence-in-depth, ${{ matrix.browser }})
         uses: nick-fields/retry@v3
         with:
           timeout_minutes: 3
           max_attempts: 2
           retry_on: any
           command: cd e2e && pnpm exec playwright install ${{ matrix.browser }}
-
-      - name: Install Playwright system deps (${{ matrix.browser }})
-        working-directory: e2e
-        run: |
-          set -e
-          for attempt in 1 2; do
-            echo "::group::install-deps attempt $attempt of 2"
-            if sudo --preserve-env=PATH timeout --signal=TERM --kill-after=30s 10m pnpm exec playwright install-deps ${{ matrix.browser }}; then
-              echo "::endgroup::"
-              exit 0
-            fi
-            rc=$?
-            echo "::endgroup::"
-            echo "Attempt $attempt failed (rc=$rc); retrying after 5s"
-            sleep 5
-          done
-          echo "All 2 install-deps attempts failed"
-          exit 1
 
       - name: Run Playwright (${{ matrix.browser }})
         working-directory: e2e
