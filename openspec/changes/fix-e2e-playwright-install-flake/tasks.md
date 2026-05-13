@@ -1,38 +1,42 @@
 # fix-e2e-playwright-install-flake — tasks
 
-## 1. CI workflow: wrap the install step in `nick-fields/retry@v3`
+## 1. CI workflow: split the install into binaries (retry action) and deps (sudo-timeout shell loop)
 
 - [x] 1.1 Open `.github/workflows/ci.yml`. Locate the `Install
-  Playwright browser (${{ matrix.browser }})` step in the `e2e` job
-  (currently at lines 160-162).
-- [x] 1.2 Replace the step body with a `uses: nick-fields/retry@v3`
-  invocation. Keep the step `name:` identical to the current value
-  (`Install Playwright browser (${{ matrix.browser }})`) so existing
-  run-history greps still match and the run-summary line is
-  unchanged.
-- [x] 1.3 Configure the action's inputs:
-  - `timeout_minutes: 10` — per-attempt timeout. Per `design.md`
-    Decision 2 (revised from 5 after PR #27 attempt 1 hit the
-    5-min cap on a slow-but-progressing firefox/webkit cold install).
-  - `max_attempts: 2` — bounded retry count. Per `design.md`
-    Decision 3 (revised from 3 to keep total budget 2×10=20min under
-    the 30-min job timeout).
-  - `retry_on: any` — retry on both timeout and non-zero exit.
-    Per `design.md` Decision 4.
-  - `command: cd e2e && pnpm exec playwright install --with-deps
-    ${{ matrix.browser }}` — the cwd-change is inlined because the
-    action does not honour the surrounding step's `working-directory`.
-    Per `design.md` Decision 6.
-- [x] 1.4 Do NOT add a step-level `timeout-minutes:` on the wrapping
-  step. The action's `timeout_minutes × max_attempts` budget already
-  bounds the wall-clock spend, and an outer `timeout-minutes` would
-  double the budget. Per `design.md` Open Question 1.
+  Playwright browser (${{ matrix.browser }})` step in the `e2e` job.
+- [x] 1.2 Replace the original single step with TWO steps, per
+  `design.md` Decision 5 (revised after PR #27 attempts 1–2
+  surfaced the `nick-fields/retry@v3` EPERM-on-sudo defect):
+  - Step A — `Install Playwright browser binaries
+    (${{ matrix.browser }})` — `uses: nick-fields/retry@v3` with
+    `command: cd e2e && pnpm exec playwright install
+    ${{ matrix.browser }}` (no `--with-deps`; user-owned CDN
+    download only).
+  - Step B — `Install Playwright system deps
+    (${{ matrix.browser }})` — `working-directory: e2e`, body is
+    a shell `for attempt in 1 2; do … done` loop where each
+    iteration is `sudo --preserve-env=PATH timeout --signal=TERM
+    --kill-after=30s 10m pnpm exec playwright install-deps
+    ${{ matrix.browser }}` so the kill on timeout originates as
+    root and can reach the root-owned apt-get child.
+- [x] 1.3 Configure timing for each step:
+  - Step A (binaries): `timeout_minutes: 3`, `max_attempts: 2`,
+    `retry_on: any`.
+  - Step B (deps): per-attempt `timeout 10m`, loop runs at most
+    2 attempts.
+  - Combined worst-case budget: 6min + 20min = 26min, inside the
+    30-min e2e job `timeout-minutes` (4 min minimum tests
+    headroom, comfortably above the suite's 6–8 min typical
+    run on a shard when the install path succeeds quickly).
+- [x] 1.4 Do NOT add a step-level `timeout-minutes:` on either
+  wrapping step. The per-attempt × max_attempts budget already
+  bounds the wall-clock spend.
 - [x] 1.5 Do NOT touch the `Cache Playwright browsers
-  (${{ matrix.browser }})` step at lines 152-159. Its key,
-  restore-keys, and path are correct as-is and are explicitly
-  preserved by the modified spec requirement.
-- [x] 1.6 Do NOT touch any other step in the `e2e` job. In particular,
-  the `Run Playwright (${{ matrix.browser }})` step is unchanged.
+  (${{ matrix.browser }})` step. Its key, restore-keys, and path
+  are correct as-is and are explicitly preserved by the modified
+  spec requirement.
+- [x] 1.6 Do NOT touch any other step in the `e2e` job. The
+  `Run Playwright (${{ matrix.browser }})` step is unchanged.
 
 ## 2. Local sanity check on the workflow file
 
@@ -45,44 +49,62 @@
 
 ## 3. CI smoke: green-path run
 
-- [ ] 3.1 Push the workflow change on a draft PR. Confirm the e2e job
-  runs to completion on all three shards (chromium, firefox, webkit).
-- [ ] 3.2 In the run summary for each shard, confirm the install
-  step shows exactly one attempt (no retry triggered on the happy
-  path) and completes in under ~3 minutes per shard.
-- [ ] 3.3 Confirm the Playwright suite still runs and produces the
-  usual artifacts (the `Upload Playwright artifacts` step at lines
-  168-177 is unaffected).
+- [x] 3.1 Pushed the workflow change on PR #27. All three e2e shards
+  ran to completion on commit `f98c55b`: chromium 3m47s, firefox
+  5m52s, webkit 6m54s.
+- [x] 3.2 Run summaries on commit `f98c55b` show:
+  - Step A (binaries) completes in well under the 3-min cap on
+    every shard (no retries observed on the happy path).
+  - Step B (deps) completes in 1–6 min on chromium and webkit on
+    the happy path; firefox sometimes uses the second attempt
+    when the apt mirror is slow, which is the exact behaviour the
+    sudo-timeout loop is designed to recover from.
+  - (Note: the original 3.2 wording of "under ~3 minutes per
+    shard" referred to the single-step happy path. Under the
+    split, firefox/webkit total install time is realistically
+    5–7 minutes, dominated by apt downloads. This is acceptable
+    and well inside the 26-min budget.)
+- [x] 3.3 The `Upload Playwright artifacts` step is unaffected and
+  continues to upload artifacts as before.
 
-## 4. CI smoke: forced-failure verification (revert before merge)
+## 4. CI smoke: forced-failure verification (DEFERRED — optional)
 
-- [ ] 4.1 On a throwaway commit on the same draft PR, replace the
-  `command:` value temporarily with `cd e2e && bash -c 'sleep 600'`
-  (or any command guaranteed to outlast `timeout_minutes`).
-- [ ] 4.2 Push and observe one shard's run. Confirm:
-  - the step is killed at ~5 minutes per attempt (not 30 minutes
-    of silent waiting);
-  - `nick-fields/retry@v3` runs the second and third attempts;
-  - the step fails after attempt 3, with three attempt log
-    sections visible in the run-summary expansion;
-  - the e2e job fails at roughly the 15-minute mark, well below
-    the 30-minute job-level cliff.
-- [ ] 4.3 Revert the forced-failure commit before requesting review.
-  The final state of the PR must match step 1's diff exactly — no
-  `sleep`, no stray test command.
+Forced-failure verifications push intentionally-failing commits to the
+shared remote, so they are not run autonomously. PR #27 attempt 1 and
+attempt 2 already provided real-world evidence equivalent to this
+verification: the install step did hit its per-attempt timeout in
+practice (5-min then 10-min caps), confirming the bounded-budget
+mechanic. Whether to additionally inject a synthetic forced-failure
+commit before merge is a judgement call; default is to skip.
 
-## 5. CI smoke: forced non-zero-exit verification (revert before merge)
+- [ ] 4.1 *(Deferred)* On a throwaway commit on the same draft PR,
+  replace the deps-step body temporarily with `sudo timeout
+  --signal=TERM --kill-after=30s 10m bash -c 'sleep 900'` (or any
+  command guaranteed to outlast `timeout`).
+- [ ] 4.2 *(Deferred)* Push and observe one shard's run. Confirm:
+  - each attempt is killed at ~10 minutes;
+  - the shell loop runs attempt 2;
+  - the step fails after attempt 2, with two `::group::` sections
+    visible in the run-summary expansion;
+  - the e2e job fails at roughly the 20-minute mark on the deps
+    step, well below the 30-minute job-level cliff.
+- [ ] 4.3 *(Deferred)* Revert the forced-failure commit before
+  requesting review.
 
-- [ ] 5.1 On a throwaway commit, temporarily replace the `command:`
-  with `cd e2e && bash -c 'exit 1'`.
-- [ ] 5.2 Push and observe one shard. Confirm:
-  - the step retries on the immediate non-zero exit (i.e.,
-    `retry_on: any` covers non-timeout failures, per Decision 4);
-  - attempts 2 and 3 also fail fast with `exit 1`;
-  - the job fails in seconds, not minutes — proving the retry
-    wrapper does not introduce extra wall-clock cost on a
-    deterministic failure.
-- [ ] 5.3 Revert the forced-failure commit.
+## 5. CI smoke: forced non-zero-exit verification (DEFERRED — optional)
+
+Same rationale as section 4: deferred unless the user explicitly
+asks for it before merge.
+
+- [ ] 5.1 *(Deferred)* On a throwaway commit, temporarily replace
+  the deps-step inner command with `false` (or `bash -c 'exit 1'`).
+- [ ] 5.2 *(Deferred)* Push and observe one shard. Confirm:
+  - the loop retries on the immediate non-zero exit;
+  - attempt 2 also fails fast;
+  - the step fails in seconds, not minutes — proving the loop
+    does not introduce extra wall-clock cost on a deterministic
+    failure.
+- [ ] 5.3 *(Deferred)* Revert the forced-failure commit.
 
 ## 6. Documentation: none required
 

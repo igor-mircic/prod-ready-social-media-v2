@@ -222,33 +222,77 @@ reader skimming the log might briefly think CI was failing. The
 attempt-summary output the action emits at the end makes the actual
 outcome obvious. Acceptable.
 
-### Decision 5: Wrap the install step, not the install command, in `nick-fields/retry@v3`
+### Decision 5: Split the install into two steps; use `nick-fields/retry@v3` for binaries and a shell `sudo timeout` loop for deps
 
-**Choice:** Replace the step that runs `pnpm exec playwright install
---with-deps ${{ matrix.browser }}` with a step using `uses:
-nick-fields/retry@v3` and passing the same command via the action's
-`command` input. Keep the step name (`Install Playwright browser
-(${{ matrix.browser }})`) so run-history greps continue to match
-and the run-summary line for this step is unchanged.
+**Choice (revised after PR #27 attempts 1–2):** Replace the single
+`pnpm exec playwright install --with-deps ${{ matrix.browser }}`
+step with two separate steps:
 
-**Why not a `timeout-minutes` step-level field plus a manual retry
-loop in shell:** GitHub Actions step-level `timeout-minutes` kills
-the step on timeout but does not retry. Reproducing retry semantics
-in shell — `for i in 1 2 3; do timeout 5m … && break; done` — works
-but loses per-attempt run-summary output and reimplements the
-action's logic in YAML. The action is small, widely used, and
-expresses intent in one place. Worth the one external dep.
+1. **Browser binaries** — `pnpm exec playwright install
+   ${{ matrix.browser }}`. Wrapped by `nick-fields/retry@v3` with
+   `timeout_minutes: 3` and `max_attempts: 2`. This half talks to
+   the Playwright CDN as the runner user; no `sudo` is involved,
+   so the action's per-attempt timeout can actually kill the
+   user-owned child process.
+2. **System dependencies** — `pnpm exec playwright install-deps
+   ${{ matrix.browser }}`, which shells out to `sudo apt-get`
+   internally. Wrapped by a shell `for attempt in 1 2; do … done`
+   loop where each attempt is `sudo --preserve-env=PATH timeout
+   --signal=TERM --kill-after=30s 10m pnpm exec playwright
+   install-deps ${{ matrix.browser }}`. The wrapping `sudo` runs
+   `timeout` as root, so when `timeout`'s budget fires it can
+   signal its root-owned child (`pnpm` → `playwright` → `apt-get`)
+   without `EPERM`.
+
+**Why the split, and not a single retry-action step:** PR #27
+attempts 1 and 2 demonstrated that `nick-fields/retry@v3` crashes
+with `Error: kill EPERM` when its per-attempt timeout fires on a
+sudo-escalated child. The action's Node runtime runs as the
+runner user; the apt-get process running under sudo has
+real-UID=0; the kernel rejects a non-root `process.kill` to a
+root target. Net effect with the action-only approach: timeout
+is respected (single-attempt hard cap), but **no retry happens**
+— only one attempt ever runs, regardless of `max_attempts`. That
+contradicts the modified spec requirement's "retry on hang"
+scenario, so it is not acceptable as the implementation.
+
+**Why the shell loop is acceptable here even though Decision 5's
+earlier draft rejected it:** the earlier rejection was on the
+grounds that a shell loop reimplements the action's logic and
+loses per-attempt run-summary output. With the EPERM finding in
+hand, the action *cannot* produce a correct per-attempt summary
+for the sudo'd step (it crashes on the kill), so the trade-off
+flips: a shell loop with explicit `::group::` markers gives clear
+per-attempt logs in the run summary, and a shell loop with `sudo
+timeout` is the only mechanism that can correctly enforce the
+timeout-then-retry semantics the spec requires for an apt-driven
+install. The action remains the right tool for the non-sudo'd
+binaries step; the loop is the right tool for the sudo'd deps
+step. The cost is two different mechanisms in one workflow
+file; the spec body explicitly admits both forms.
+
+**Why not run the unified `playwright install --with-deps` under
+a single `sudo timeout` loop:** doing so would make the binary
+download run as root, with binaries landing under `/root/.cache/`
+(or, with `--preserve-env=HOME`, in `/home/runner/.cache/` but
+root-owned). Either ownership shape complicates the `actions/cache`
+restore/save cycle, which expects user-owned files in
+`/home/runner/.cache/ms-playwright`. The split keeps the binary
+half user-owned (clean cache semantics) and confines `sudo` to
+the apt half (which writes into `/usr` and never touches the
+binary cache directory).
 
 **Why not `actions-marketplace/retry-step` or an
-`alphaprinz/retry-action` clone:** the chosen action
-(`nick-fields/retry@v3`) is the most-starred and most-maintained
-of the family. Pinning the major version is sufficient — a `v3`
-major-version freeze does not auto-pick a v4 that might change
-semantics.
+`alphaprinz/retry-action` clone:** every Node-based retry action
+shares the same EPERM defect for sudo'd children — it is a
+kernel-level signalling rule, not an `nick-fields/retry@v3`
+implementation bug. Switching brands would not help. The action
+is retained for the binaries step because the binaries step has
+no sudo and works correctly.
 
-**Trade-off:** one more third-party action in the workflow.
-Reviewed against the action's source — it is a small composite
-action with no surprising network calls. Acceptable.
+**Trade-off:** two install steps instead of one, and two
+different retry mechanisms. The workflow file is slightly more
+complex; the spec body explicitly permits this shape.
 
 ### Decision 6: Working directory stays `e2e/` (passed via the action's `command` input)
 

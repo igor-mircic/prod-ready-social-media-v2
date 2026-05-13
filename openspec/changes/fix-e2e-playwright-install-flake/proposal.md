@@ -88,38 +88,46 @@ hand. Recorded under Alternatives Considered in `design.md`.
 
 ## What Changes
 
-- **CI — wrap the `Install Playwright browser` step in
-  `nick-fields/retry@v3`** with `timeout_minutes: 5`,
-  `max_attempts: 3`, `retry_on: any`, and
-  `command: pnpm exec playwright install --with-deps ${{ matrix.browser }}`
-  (run from the `e2e/` working directory). The action handles both
-  the per-attempt timeout (kills the apt-get hang at 5 minutes
-  instead of 30) and the retry (a transient mirror failure recovers
-  on attempt 2 or 3 without any human action). `retry_on: any`
-  retries on both timeout and non-zero exit (apt-get failures
-  surface in both shapes — silent hang *and* `Failed to fetch …`),
-  which is acceptable because `playwright install --with-deps` is
-  idempotent: re-running it after a partial run is safe.
+- **CI — split the install into two bounded-retry steps** (revised
+  during implementation after PR #27 attempts 1–2 surfaced an
+  `EPERM`-on-sudo defect in `nick-fields/retry@v3` — see
+  `design.md` Decision 5 and Open Questions):
+  - **Step A — Browser binaries.** `nick-fields/retry@v3` wraps
+    `pnpm exec playwright install ${{ matrix.browser }}` (no
+    `--with-deps`, so no sudo) with `timeout_minutes: 3`,
+    `max_attempts: 2`, `retry_on: any`. The action's per-attempt
+    timeout can kill the user-owned pnpm child cleanly here.
+  - **Step B — System deps.** A shell `for attempt in 1 2; do … done`
+    loop where each iteration is `sudo --preserve-env=PATH timeout
+    --signal=TERM --kill-after=30s 10m pnpm exec playwright
+    install-deps ${{ matrix.browser }}`. Because `timeout` runs
+    under `sudo`, its kill signal originates as root and can
+    terminate the root-owned apt-get grandchild — sidestepping the
+    `kill EPERM` that the retry action hits when its non-root Node
+    runtime tries to signal a sudo-escalated child.
+  - Combined worst-case budget: 6 + 20 = 26 minutes, inside the
+    30-minute e2e job timeout.
 - **CI — the cache step is unchanged.** The `actions/cache@v4` step
-  at `.github/workflows/ci.yml:152-159` keeps its key, restore-keys,
-  and per-browser scoping. Only the *install* step is modified.
+  keeps its key, restore-keys, and per-browser scoping. Only the
+  *install* step is split.
 - **OpenSpec — modify the "E2E job caches Playwright browser
-  binaries per matrix shard" requirement** at
-  `openspec/specs/ci/spec.md:227-254` to add the bounded-budget
-  language: the install invocation still runs unconditionally and is
-  still `playwright install --with-deps ${{ matrix.browser }}`, but
-  it SHALL now run *inside* a retry wrapper with a per-attempt
-  timeout strictly less than the e2e job timeout, with a small
-  bounded `max_attempts`, retrying on any failure. New scenarios
-  cover: per-attempt timeout shorter than the job timeout, retry on
-  hang, total budget bounded under the job timeout, cold cache still
-  passes, idempotency of the install command.
-- **No spec change to "e2e job has Docker available …"** at
-  `openspec/specs/ci/spec.md:184-198`. The runner is still
-  `ubuntu-latest`, the job is still not containerised, and
-  Testcontainers still talks to the host Docker daemon. The
-  container-based option is recorded as a non-goal here and a
-  potential future change.
+  binaries per matrix shard" requirement** to add bounded-budget
+  language: the install MAY be expressed as one `--with-deps` step
+  or two split steps, but every install step SHALL run inside a
+  bounded retry wrapper with a per-attempt timeout strictly less
+  than the e2e job timeout and a small bounded `max_attempts`,
+  retrying on any failure. The wrapper for any sudo-escalated step
+  MUST be capable of terminating root-owned children (i.e., a shell
+  loop with `sudo timeout`), because Node-based retry actions
+  cannot. New scenarios cover: per-attempt timeout shorter than the
+  job timeout, retry on hang (with the sudo-aware kill caveat),
+  total budget bounded under the job timeout, retry on non-zero
+  exit, and persistent failure surfacing.
+- **No spec change to "e2e job has Docker available …"**. The
+  runner is still `ubuntu-latest`, the job is still not
+  containerised, and Testcontainers still talks to the host Docker
+  daemon. The container-based option is recorded as a non-goal here
+  and a potential future change.
 
 ### Explicit non-goals (recorded as potential follow-ups)
 
@@ -172,27 +180,33 @@ hand. Recorded under Alternatives Considered in `design.md`.
 ## Impact
 
 - **CI:**
-  - Modified: `.github/workflows/ci.yml` — the `Install Playwright
-    browser (${{ matrix.browser }})` step is replaced with a
-    `nick-fields/retry@v3` step that wraps the same
-    `pnpm exec playwright install --with-deps ${{ matrix.browser }}`
-    command. The step keeps its name so existing run-history greps
-    still match.
+  - Modified: `.github/workflows/ci.yml` — the original `Install
+    Playwright browser (${{ matrix.browser }})` step is replaced
+    with two new steps: `Install Playwright browser binaries
+    (${{ matrix.browser }})` (uses `nick-fields/retry@v3`) and
+    `Install Playwright system deps (${{ matrix.browser }})` (a
+    shell `sudo timeout` retry loop). Run-history greps for the
+    original step name will not match; the new step names are
+    descriptive of which half they cover.
 - **OpenSpec specs:**
   - Modified at archive time:
     `openspec/specs/ci/spec.md` — the "E2E job caches Playwright
     browser binaries per matrix shard" requirement gains
-    timeout/retry language and four new scenarios. No other
-    requirement is touched.
+    timeout/retry language and five new scenarios (per-attempt
+    timeout, retry on hang, total budget bounded, retry on
+    non-zero exit, persistent failure surfacing). The body
+    explicitly permits both single-step and two-step shapes. No
+    other requirement is touched.
 - **Backend / Frontend / e2e harness / docker-compose.yml /
   README.md:** No changes.
 - **Database:** No migrations. No schema changes.
-- **Dependencies:** No new application dependencies. One new
-  GitHub Actions third-party action (`nick-fields/retry@v3`) is
-  referenced from the workflow.
-- **Test plan for the change itself:** Verified on PR by inspecting
-  a forced-failure attempt — an artificial command of
-  `bash -c 'sleep 600'` inside the retry block must fail in 5
-  minutes (not 30) and report three attempts. Then revert to the
-  real command and confirm a normal run still passes in <3 minutes
-  on the happy path. See `tasks.md` step 4.
+- **Dependencies:** No new application dependencies. One GitHub
+  Actions third-party action (`nick-fields/retry@v3`) is
+  referenced from the workflow for the binaries step.
+- **Test plan for the change itself:** Verified on PR #27 across
+  three attempts. Final attempt (commit `f98c55b`, split into
+  two steps): all five required checks passed — chromium 3m47s,
+  firefox 5m52s, webkit 6m54s, backend 1m14s, frontend 50s.
+  Optional forced-failure verifications recorded in `tasks.md`
+  sections 4–5 are deferred (real-world timeouts on attempts 1
+  and 2 already exercised the bounded-budget mechanic).
