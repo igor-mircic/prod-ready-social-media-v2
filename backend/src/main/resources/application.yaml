@@ -17,6 +17,14 @@ spring:
 server:
   forward-headers-strategy: framework
 
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        environment: local
+
 management:
   endpoints:
     web:

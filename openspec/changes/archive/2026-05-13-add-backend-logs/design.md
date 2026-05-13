@@ -148,10 +148,23 @@ Do not use `@Order` annotations on the filter classes.
 order  filter                       MDC fields populated on entry
 ─────  ───────────────────────────  ─────────────────────────────
 -200   RequestIdFilter              request.id
+-150   RequestLoggingFilter         (timer start; reads MDC + attr at exit)
 -100   springSecurityFilterChain    [Spring Security default]
    0   UserContextLogFilter         user.id (post-auth)
- 100   RequestLoggingFilter         (none — reads MDC at exit)
 ```
+
+**Implementation note (deviates from this slice's first draft, which
+placed RequestLoggingFilter at `+100`):** Spring Security's
+`ExceptionTranslationFilter` catches an `AuthenticationException` /
+`AccessDeniedException` raised by `AuthorizationFilter`, invokes the
+configured `AuthenticationEntryPoint` (writing the 401 ProblemDetail in
+this project) and returns *without re-invoking the outer servlet
+chain*. A filter at order `+100` therefore never runs for an
+unauthenticated request to a protected route, and the
+"401 emits a `backend.access` line" requirement is unsatisfiable from
+that position. Placing `RequestLoggingFilter` at `-150` wraps both the
+happy and security-denied paths in a single timer, and the access-log
+emission is guaranteed regardless of what the security chain decides.
 
 **Why three, not one:** the three pieces of state have different
 "earliest available" points:
@@ -210,26 +223,34 @@ gets zero new lines for this slice.
 need to stay coherent across packages. `ObservabilityWebConfig`
 documents the order constants used and the meaning of each.
 
-### Decision 5: `RequestLoggingFilter` reads MDC at exit; no per-filter parameter plumbing
+### Decision 5: `RequestLoggingFilter` reads MDC at exit; `user.id` survives via a request attribute
 
-**Choice:** `RequestLoggingFilter` reads `request.id` and
-`user.id` via `MDC.get(...)` at the moment it emits its
-access-log line. It does NOT receive these values as method
-parameters from the upstream filters.
+**Choice:** `RequestLoggingFilter` reads `request.id` from MDC at
+the moment it emits its access-log line. Because the filter runs
+*outside* the Spring Security chain (Decision 3), it observes the
+chain after `UserContextLogFilter` has already cleared its MDC
+entry in `finally`; `UserContextLogFilter` therefore *also*
+mirrors `user.id` into a request attribute
+(`AccessLogMarkers.REQUEST_ATTR_USER_ID`) when it sets MDC.
+`RequestLoggingFilter` reads that attribute and restores
+`user.id` into MDC for the single access-log call, then removes
+it again — preserving the original intent that the JSON envelope
+lifts MDC entries automatically while accommodating the filter
+order forced by Decision 3.
 
-**Why:** MDC is already a per-thread context propagated through
-the servlet chain — the upstream filters have set the values,
-and structured logging will pick them up automatically when the
-final log call is made (the same way every other log call in
-the request will). Reading MDC explicitly in the access-log
-line is purely so the application code can also serialise the
-fields into a structured marker; it's a belt-and-braces choice
-that makes the access-log line self-contained even if
-downstream JSON-shape choices change.
+**Why:** MDC is the right surface for the JSON envelope (the
+ECS encoder picks it up without per-filter marker plumbing), but
+MDC is also the right surface for the *inner* request lifetime
+because any controller-level log line should carry `user.id`.
+Keeping `user.id` in MDC for the duration of the servlet request
+*and* propagating it through the request attribute to the
+outer-filter access log is the smallest change that satisfies
+both. The request attribute is request-scoped and dies with the
+request, so it does not leak across Tomcat thread reuse.
 
 The footgun this guards against — Tomcat thread reuse leaking
-MDC across requests — is mitigated by every upstream filter
-clearing its keys in `finally`, AND verified by the
+MDC across requests — is mitigated by every filter that adds
+keys clearing them in `finally`, AND verified by the
 `StructuredLoggingIT` test that logs from a non-servlet thread
 and asserts NO `request.id` / `user.id` field is present.
 

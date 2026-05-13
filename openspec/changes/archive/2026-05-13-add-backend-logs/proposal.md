@@ -93,24 +93,28 @@ between these).
   the `X-Request-Id` header so clients can correlate, and clears
   MDC in `finally`. The header round-trip is the user-visible
   surface of this change.
+- **Backend — `observability/RequestLoggingFilter.java`** new
+  servlet filter (order `-150`, between `RequestIdFilter` and the
+  Spring Security chain so it wraps both happy- and security-
+  denied paths in a single timer). Wraps the chain with a start-
+  nanos timer. On exit, emits one log line at INFO with marker
+  `event.dataset=backend.access` carrying `http.request.method`,
+  `url.path`, `http.response.status_code`, `event.duration`
+  (nanoseconds, ECS canonical) and a derived `duration_ms` for
+  human readability. Reads `request.id` from MDC and `user.id`
+  from a request attribute (mirrored by `UserContextLogFilter` —
+  see `design.md` Decision 5). Skips logging for `/actuator/health`
+  and `/actuator/prometheus` to keep the per-15s Prometheus scrape
+  out of the log volume.
 - **Backend — `observability/UserContextLogFilter.java`** new
   servlet filter (order `0`, runs after the Spring Security filter
   chain at default `-100`). Reads
   `SecurityContextHolder.getContext().getAuthentication()`; if the
-  principal is a `UserPrincipal`, puts `user.id` in MDC. Clears
-  in `finally`. Anonymous / failed-auth requests carry no
-  `user.id` field, which is the correct shape.
-- **Backend — `observability/RequestLoggingFilter.java`** new
-  servlet filter (order `100`, deepest). Wraps the chain with a
-  start-nanos timer. On exit, emits one log line at INFO with
-  marker `event.dataset=backend.access` carrying
-  `http.request.method`, `url.path`,
-  `http.response.status_code`, `event.duration` (nanoseconds, ECS
-  canonical) and a derived `duration_ms` for human readability.
-  Reads `request.id` and `user.id` directly from MDC (no
-  parameter plumbing). Skips logging for `/actuator/health` and
-  `/actuator/prometheus` to keep the per-15s Prometheus scrape
-  out of the log volume.
+  principal is a `UserPrincipal`, puts `user.id` in MDC AND
+  mirrors it into a request attribute so the outer
+  `RequestLoggingFilter` can include it in the access-log line.
+  Clears MDC in `finally`. Anonymous / failed-auth requests carry
+  no `user.id` field, which is the correct shape.
 - **Backend — `observability/ObservabilityWebConfig.java`** new
   `@Configuration` class registering the three filters as
   `FilterRegistrationBean`s with explicit `setOrder(...)` values.

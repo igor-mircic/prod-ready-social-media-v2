@@ -123,8 +123,14 @@ any placeholder value in MDC (the JSON line SHALL simply omit the
 
 The backend SHALL register a servlet filter
 `backend/src/main/java/com/prodready/social/observability/RequestLoggingFilter.java`
-(servlet filter ordering value `100`, i.e. after Spring Security's
-chain and after `UserContextLogFilter`). For every HTTP request
+at servlet filter ordering value `-150`, i.e. between `RequestIdFilter`
+(`-200`) and Spring Security's default order (`-100`) so that the
+access-log line is emitted for both happy-path and security-rejected
+requests (Spring Security's `ExceptionTranslationFilter` consumes the
+401/403 exception and never re-invokes the outer servlet chain — a filter
+placed *after* the security chain would never run for a 401, and the
+"401 access log line" scenario below would be unsatisfiable). For every
+HTTP request
 the filter SHALL emit exactly one log event at level INFO via the
 logger named `backend.access` carrying the following structured
 fields:
@@ -196,9 +202,9 @@ throw still produce a line.
 The backend SHALL declare a `@Configuration` class
 `backend/src/main/java/com/prodready/social/observability/ObservabilityWebConfig.java`
 that registers the three observability filters (`RequestIdFilter`,
-`UserContextLogFilter`, `RequestLoggingFilter`) as
+`RequestLoggingFilter`, `UserContextLogFilter`) as
 `FilterRegistrationBean`s with explicit `setOrder(...)` values of
-`-200`, `0`, and `100` respectively. The class SHALL NOT modify
+`-200`, `-150`, and `0` respectively. The class SHALL NOT modify
 `backend/src/main/java/com/prodready/social/useraccounts/SecurityConfig.java`
 or any other `user-accounts` source file. The deny-by-default
 `SecurityFilterChain` allowlist enumerated in `user-accounts`
@@ -211,10 +217,10 @@ SHALL be unchanged by this slice.
   `FilterRegistrationBean<...>`
 - **AND** the registration for `RequestIdFilter` calls
   `setOrder(-200)`
-- **AND** the registration for `UserContextLogFilter` calls
-  `setOrder(0)`
 - **AND** the registration for `RequestLoggingFilter` calls
-  `setOrder(100)`.
+  `setOrder(-150)`
+- **AND** the registration for `UserContextLogFilter` calls
+  `setOrder(0)`.
 
 #### Scenario: `SecurityConfig` is not modified by this slice
 
