@@ -4,10 +4,9 @@ apiVersion: 1
 # Grafana cannot mutate the provisioned state. `isDefault: false` keeps
 # Prometheus the default datasource for ad-hoc queries.
 #
-# The `tracesToLogs` correlation block (which makes a `trace.id` clickable in
-# a log line to jump to Tempo's span view) lands in the slice-4 follow-up
-# once Loki is provisioned as the log datasource — see the
-# add-backend-traces proposal "Open follow-ups."
+# `tracesToLogsV2` turns a Tempo span view into a one-click pivot to the
+# matching Loki log lines for the same request — keyed on the `trace.id`
+# span tag and the symmetric `trace.id` field in the log line body.
 
 datasources:
   - name: Tempo
@@ -17,3 +16,12 @@ datasources:
     url: http://tempo:3200
     isDefault: false
     editable: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        tags: ['trace.id']
+        filterByTraceID: false
+        spanStartTimeShift: '-1h'
+        spanEndTimeShift: '1h'
+        customQuery: true
+        query: '{service_name="backend"} |~ `"trace\\.id":"${__span.traceId}"`'

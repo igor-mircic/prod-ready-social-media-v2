@@ -62,6 +62,9 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Validate observability compose profile YAML
+        run: docker compose --profile observability config -q
+
   frontend:
     name: frontend (gen + test + build)
     runs-on: ubuntu-latest

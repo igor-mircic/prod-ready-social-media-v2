@@ -21,9 +21,21 @@ logging:
   structured:
     format:
       console: ecs
+      # File appender uses the same ECS formatter as the console appender —
+      # every event renders as one byte-identical JSON line on both
+      # surfaces when the file appender engages.
+      file: ecs
     ecs:
       service:
         environment: local
+  # Env-var gated: when LOG_FILE_PATH is unset (the default), the
+  # placeholder resolves to an empty string and Spring Boot creates no
+  # file appender — the dev loop stays stdout-only. When set (e.g.
+  # ./infra/observability/logs/backend.json), Spring Boot writes the
+  # same ECS JSON lines to that file alongside stdout, and the OTel
+  # Collector's filelog receiver tails them into Loki.
+  file:
+    name: ${LOG_FILE_PATH:}
 
 management:
   endpoints:

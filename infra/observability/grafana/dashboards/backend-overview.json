@@ -284,6 +284,25 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 15,
+      "title": "Recent logs",
+      "type": "logs",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 46 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{service_name=\"backend\"} | json",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "10s",
