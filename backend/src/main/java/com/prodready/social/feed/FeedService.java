@@ -4,6 +4,7 @@ import com.prodready.social.posts.AuthorSummary;
 import com.prodready.social.posts.PostCursorCodec;
 import com.prodready.social.posts.PostListResponse;
 import com.prodready.social.posts.PostResponse;
+import io.micrometer.core.annotation.Timed;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -26,6 +27,7 @@ public class FeedService {
     this.cursorCodec = cursorCodec;
   }
 
+  @Timed("feed.read.duration")
   public PostListResponse findPage(UUID callerId, String cursor, Integer limit) {
     int effectiveLimit = clampLimit(limit);
     Limit fetchLimit = Limit.of(effectiveLimit + 1);

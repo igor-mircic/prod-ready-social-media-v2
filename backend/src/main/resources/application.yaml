@@ -21,10 +21,23 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: never
+  metrics:
+    tags:
+      application: prod-ready-social-media-backend
+      service: backend
+    # Emit Prometheus histogram buckets (not just count/sum/max) so the
+    # backend-overview dashboard's histogram_quantile(...) panels render.
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        feed.fanout.duration: true
+        feed.read.duration: true
+        posts.create.duration: true
+        follows.follow.duration: true
 
 app:
   auth:

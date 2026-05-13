@@ -1,6 +1,7 @@
 package com.prodready.social.feed;
 
 import com.prodready.social.posts.Post;
+import io.micrometer.core.annotation.Timed;
 import java.util.UUID;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -20,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 @Transactional(propagation = Propagation.MANDATORY)
+@Timed("feed.fanout.duration")
 public class FeedFanoutService {
 
   private final NamedParameterJdbcTemplate jdbc;

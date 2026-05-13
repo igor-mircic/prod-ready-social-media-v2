@@ -3,6 +3,7 @@ package com.prodready.social.posts;
 import com.prodready.social.feed.FeedFanoutService;
 import com.prodready.social.useraccounts.User;
 import com.prodready.social.useraccounts.UserRepository;
+import io.micrometer.core.annotation.Timed;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,6 +36,7 @@ public class PostService {
   }
 
   @Transactional
+  @Timed("posts.create.duration")
   public PostResponse create(UUID callerId, CreatePostRequest request) {
     Post post = new Post(UUID.randomUUID(), callerId, request.body());
     // Flush so the posts row exists before the fanout INSERT references it via FK.

@@ -1,0 +1,23 @@
+# Prometheus scrape configuration for the local-dev observability stack.
+#
+# The backend runs on the host (Gradle bootRun, port 8080), NOT inside a
+# container — so the scrape target is `host.docker.internal:8080`.
+#
+# NOTE: `host.docker.internal` resolves automatically on Docker Desktop for
+# macOS and Windows. On Linux it does NOT resolve by default. Linux operators
+# must either:
+#   - add `extra_hosts: ["host.docker.internal:host-gateway"]` to the
+#     `prometheus` service in `docker-compose.yml`, OR
+#   - set the prometheus service to `network_mode: host` and update this
+#     target to `localhost:8080`.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: backend
+    metrics_path: /actuator/prometheus
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - host.docker.internal:8080

@@ -2,6 +2,7 @@ package com.prodready.social.follows;
 
 import com.prodready.social.feed.FeedFanoutService;
 import com.prodready.social.useraccounts.UserRepository;
+import io.micrometer.core.annotation.Timed;
 import java.util.UUID;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
@@ -26,6 +27,7 @@ public class FollowService {
   }
 
   @Transactional
+  @Timed("follows.follow.duration")
   public void follow(UUID callerId, UUID targetId) {
     if (callerId.equals(targetId)) {
       throw new SelfFollowException();
