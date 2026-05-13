@@ -1,0 +1,19 @@
+apiVersion: 1
+
+# Tempo datasource — `editable: false` mirrors the Prometheus datasource so
+# Grafana cannot mutate the provisioned state. `isDefault: false` keeps
+# Prometheus the default datasource for ad-hoc queries.
+#
+# The `tracesToLogs` correlation block (which makes a `trace.id` clickable in
+# a log line to jump to Tempo's span view) lands in the slice-4 follow-up
+# once Loki is provisioned as the log datasource — see the
+# add-backend-traces proposal "Open follow-ups."
+
+datasources:
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: false
+    editable: false

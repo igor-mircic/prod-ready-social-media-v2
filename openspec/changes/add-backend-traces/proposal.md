@@ -93,12 +93,16 @@ Loki and may as well consolidate trace + log shipping. Recorded in
     into Logback's `LoggingEvent` MDC view at log-emit time)
 - **Backend —
   `observability/EcsTraceFieldsCustomizer.java`** new
-  `StructuredLoggingJsonMembersCustomizer<?>` bean (Spring Boot 4 native
-  extension hook) that reads the agent-populated MDC keys `trace_id`,
+  `StructuredLoggingJsonMembersCustomizer<?>` implementation (Spring Boot 4
+  native extension hook) that reads the agent-populated MDC keys `trace_id`,
   `span_id`, `trace_flags` from the structured-log event and re-emits them
   as ECS-canonical nested keys `trace.id`, `span.id`, `trace.flags` on the
   JSON envelope. The Logstash-style keys are dropped from the output so
-  every line carries exactly one naming convention. This avoids introducing
+  every line carries exactly one naming convention. The customizer is
+  registered via `backend/src/main/resources/META-INF/spring.factories`
+  (not `@Component`) — Spring Boot 4 initializes the structured-log
+  formatter during Logback init, before the Spring context exists, and
+  loads customizers via `SpringFactoriesLoader`. This avoids introducing
   `logback-spring.xml` (forbidden by the existing slice-2 spec requirement
   "No logback-spring.xml is introduced"). Decision 2 in `design.md` records
   why this approach was chosen over the alternatives (custom Logback
@@ -142,13 +146,19 @@ Loki and may as well consolidate trace + log shipping. Recorded in
     lowercase hex string;
   - a log event emitted *outside* a span (e.g., from a fresh thread)
     carries no `trace.id` and no `span.id` field;
-  - the `@Timed("posts.create.duration")` method executed during a
-    `POST /api/v1/posts` produces a child span whose name contains
-    `PostService.create` (proves the agent picks up the slice-1 `@Timed`
-    annotations as spans, not just metrics).
-  Span shipping to Tempo is *not* asserted in this IT — the assertion
-  uses the agent's in-process `InMemorySpanExporter` test hook, which
-  is the lighter and faster path. `design.md` Decision 6 records why.
+  - one authenticated `POST /api/v1/posts` request emits an access-log
+    line carrying populated `trace.id` and `span.id` ECS fields (proves
+    the endpoint that invokes the slice-1 `@Timed PostService.create`
+    method is traced end-to-end).
+  The literal "captured span set contains a span named `PostService.create`"
+  assertion from the original proposal text is **deferred**: the production
+  OTel Java agent's instrumentation modules cache `Tracer` references at
+  module-load time, which makes the `opentelemetry-sdk-testing`
+  `OpenTelemetryExtension` / `InMemorySpanExporter` swap pattern
+  ineffective. A future change can wire a custom agent extension JAR
+  (`OTEL_JAVAAGENT_EXTENSIONS=…`) exposing captured spans to the test
+  classloader. `design.md` Decision 6 records this trade-off; the
+  README copy-paste workflow is the manual smoke for the OTLP wire path.
 - **README.md** gains a `### Distributed tracing` subsection under the
   existing `## Local observability` section. Documents:
   - that `docker-compose --profile observability up -d` now also brings

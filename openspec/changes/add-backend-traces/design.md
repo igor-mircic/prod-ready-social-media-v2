@@ -146,7 +146,7 @@ reconcile that in Decision 2 below.
   bridge emits a parallel one. The OTel docs explicitly warn against
   this.
 
-### Decision 2: Reconcile MDC key naming via a Spring-native `StructuredLoggingJsonMembersCustomizer` bean
+### Decision 2: Reconcile MDC key naming via a `StructuredLoggingJsonMembersCustomizer` registered through `META-INF/spring.factories`
 
 The OTel Java agent's `instrumentation-logback-mdc-1.0` module puts
 `trace_id`, `span_id`, and `trace_flags` into the Logback
@@ -166,10 +166,10 @@ We want the ECS-canonical nested form on every line:
 ```
 
 Spring Boot 4 exposes a first-party hook for exactly this kind of
-field-level rewrite: a Spring-bean implementation of
-`StructuredLoggingJsonMembersCustomizer<?>`. The bean intercepts the
-JSON members for each event and can add, rename, or drop keys. We
-declare one bean
+field-level rewrite: an implementation of
+`StructuredLoggingJsonMembersCustomizer<?>`. The customizer
+intercepts the JSON members for each event and can add, rename, or
+drop keys. We declare one class
 (`backend/src/main/java/com/prodready/social/observability/EcsTraceFieldsCustomizer.java`)
 that:
 
@@ -204,6 +204,26 @@ The customizer approach is the only path that simultaneously honours
 the slice-2 "no `logback-spring.xml`" rule, requires no application
 dependency on `io.opentelemetry.*`, and runs at the right point in
 the JSON-emission pipeline.
+
+**Registration mechanism**: Spring Boot 4 initializes
+`StructuredLogFormatterFactory` during Logback init, *before* the
+Spring application context exists. The factory's
+`JsonMembersCustomizerBuilder.loadStructuredLoggingJsonMembersCustomizers()`
+uses `SpringFactoriesLoader` (legacy `META-INF/spring.factories` SPI
+or the `logging.structured.json.customizer` property) — not the
+Spring bean container — to discover customizers. So
+`EcsTraceFieldsCustomizer` is registered via
+`backend/src/main/resources/META-INF/spring.factories`, not as a
+`@Component` / `@Configuration` bean. The `@Order` annotation is
+still honoured by the loader's `OrderComparator` sort.
+
+**Path-filter semantics**: Spring Boot 4's
+`Members.applyingPathFilter(Predicate<MemberPath>)` predicate is
+*exclusionary* — returning `true` from the predicate drops the path
+from the rendered JSON, `false` keeps it. (Confirmed empirically:
+returning `true` for "keep" produces an empty `{}` line for every
+event.) The implementation reflects this: the filter targets the
+flat top-level Logstash-style keys and returns `true` to skip them.
 
 ### Decision 3: Resolve the agent JAR via a dedicated Gradle `agent` configuration, not the runtime classpath
 
@@ -297,9 +317,9 @@ application and Loki anyway, and consolidating trace + log shipping
 into one collector is the natural shape. Recorded in "Open
 follow-ups."
 
-### Decision 6: Integration test uses an in-process span exporter, not a real Tempo container
+### Decision 6: Integration test asserts on the log-emission pipeline, not on captured spans
 
-Two viable test strategies:
+Three test strategies were considered:
 
 (a) Boot a real Tempo container alongside Postgres in
 `TracingIT`, exercise the backend, then poll Tempo's HTTP API for
@@ -309,28 +329,39 @@ cold-start to every test run, depends on Tempo's flushing behavior
 pull.
 
 (b) Register an in-process `InMemorySpanExporter` on the agent's
-`OpenTelemetry` global, exercise the backend, then assert directly
-on the captured spans. The agent-emitted spans are inspected in the
-same JVM that emitted them — no network, no flushing, no second
-container.
+`OpenTelemetry` global (via `opentelemetry-sdk-testing`'s
+`OpenTelemetryExtension`), exercise the backend, then assert
+directly on the captured spans. *Discovered at implementation time:*
+this does **not** work with the production OTel Java agent. The
+agent installs `GlobalOpenTelemetry` at JVM start and its
+instrumentation modules cache `Tracer` references at module-load
+time (`Instrumenter` builders read `GlobalOpenTelemetry.get()` once,
+not per-call). A `resetForTest()` + `set(testSdk)` from
+`@BeforeEach` swaps the global, but the agent's already-cached
+Tracers continue to feed the original SDK. The official OpenTelemetry
+recommendation in this case is to use the `opentelemetry-agent-for-testing`
+JAR (a separate test-only agent that exposes
+`AgentTestingExporterAccess.getExportedSpans()`) — which would mean
+tests run against a *different* agent than production, defeating
+purpose 1 of the test ("prove the agent attached successfully").
 
-We choose **(b)**. The agent-side wiring (the agent's
-`SpiHelper`-based exporter discovery) is the same code path the
-production OTLP exporter uses; if it works in-process it works to a
-real OTLP backend. The OTLP exporter wiring itself is
-straight-line config that does not need an end-to-end test.
+(c) Assert the log-emission pipeline carries trace context end-to-end:
+the agent is attached (a directly-started span has a valid
+`SpanContext` with 32-hex `traceId` / 16-hex `spanId`), per-request
+access-log lines carry ECS-canonical `trace.id` / `span.id`, and
+log lines outside any active span carry neither.
 
-The proposal-listed assertions (non-blank hex `trace.id` in the JSON
-log line; `@Timed` methods produce child spans named after the
-class+method) are all satisfiable from the in-process exporter
-without ever opening a TCP socket.
-
-The trade-off — that we don't *prove* the OTLP wire format reaches
-Tempo in CI — is mitigated by the README run-loop scenario being
-the manual smoke test. A developer running
-`docker-compose --profile observability up -d` and pasting a
-`trace.id` from a log line into Tempo's Grafana search exercises
-the wire path on day one.
+We choose **(c)**, with one deferred follow-up. The pipeline that
+matters on the wire — agent → MDC → ECS-customizer → JSON — is
+fully covered. The literal "span name `PostService.create` exists in
+the captured span set" assertion from the original proposal is
+explicitly deferred: it would require a custom agent extension JAR
+(`OTEL_JAVAAGENT_EXTENSIONS=…`) exposing a static
+`getCapturedSpans()` API to the application classloader, which is
+infrastructure for a follow-up change. The README run-loop scenario
+(developer pastes a `trace.id` from a log line into Tempo's Grafana
+search and lands on the right trace tree) is the manual smoke that
+exercises the OTLP wire path.
 
 ### Decision 7: 100% sampling locally; sampling configuration is a future change
 
@@ -448,6 +479,14 @@ next:
 - **Tempo authentication and retention** — local Tempo runs
   anonymous with 1-hour block retention. Production needs OIDC and
   longer retention with object-storage backend (S3 / GCS).
+
+- **In-process span-name capture in `TracingIT`** — see Decision 6.
+  Today the IT asserts the log-emission pipeline; the literal
+  "captured span set contains span name `PostService.create`"
+  assertion needs an agent extension JAR
+  (`OTEL_JAVAAGENT_EXTENSIONS=…`) that exposes spans through the
+  bootstrap classloader. Recorded as a follow-up so a future test
+  pass can pick it up.
 
 - **Outbound `traceparent` injection** — already-supported by the
   agent the moment outbound HTTP appears; not a new follow-up,

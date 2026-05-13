@@ -65,7 +65,7 @@ The backend's OTel agent SHALL be configured via environment variables (defaulte
 
 ### Requirement: Per-request log lines carry ECS-canonical `trace.id` and `span.id` fields
 
-The backend SHALL declare a `@Configuration`-registered Spring bean implementing `org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer<?>` at `backend/src/main/java/com/prodready/social/observability/EcsTraceFieldsCustomizer.java`. The bean SHALL run with `@Order(Ordered.LOWEST_PRECEDENCE)` so it executes after any other JSON-members customizer, and SHALL:
+The backend SHALL declare a class implementing `org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer<?>` at `backend/src/main/java/com/prodready/social/observability/EcsTraceFieldsCustomizer.java`, registered via `backend/src/main/resources/META-INF/spring.factories` under the key `org.springframework.boot.logging.structured.StructuredLoggingJsonMembersCustomizer`. (Spring Boot 4 initializes the structured-log formatter via `SpringFactoriesLoader` during Logback init, before the Spring application context exists — so `@Component`/`@Configuration` registration is too late and is forbidden here.) The customizer SHALL be annotated `@Order(Ordered.LOWEST_PRECEDENCE)` so it executes after any other JSON-members customizer, and SHALL:
 
 - read the `trace_id`, `span_id`, and `trace_flags` keys from the current `LoggingEvent`'s MDC view (which the OTel agent's `instrumentation-logback-mdc` module populates at log-emit time);
 - when `trace_id` is non-blank, emit a JSON member `trace.id` (nested ECS form) carrying that value, and remove the Logstash-style `trace_id` key from the JSON output;
@@ -73,7 +73,7 @@ The backend SHALL declare a `@Configuration`-registered Spring bean implementing
 - when `trace_flags` is non-blank, emit a JSON member `trace.flags` carrying that value, and remove the `trace_flags` key from the JSON output;
 - when any of those MDC keys is absent or blank, omit the corresponding ECS field entirely (the JSON line carries no empty placeholder).
 
-The bean SHALL NOT introduce a `logback-spring.xml` or a `logback.xml` and SHALL NOT add a Logback converter pattern (the existing slice-2 prohibition on `logback-spring.xml` is preserved).
+The customizer SHALL NOT introduce a `logback-spring.xml` or a `logback.xml` and SHALL NOT add a Logback converter pattern (the existing slice-2 prohibition on `logback-spring.xml` is preserved).
 
 #### Scenario: Authenticated request emits one access log line carrying populated `trace.id` and `span.id`
 
@@ -162,13 +162,14 @@ The repository's `README.md` SHALL include a `### Distributed tracing` subsectio
 
 ### Requirement: Integration test proves the agent → MDC → ECS pipeline end-to-end in-process
 
-The `backend/` project SHALL include a Testcontainers integration test `backend/src/test/java/com/prodready/social/observability/TracingIT.java` that boots the full Spring context against a Testcontainers Postgres with the OTel Java agent attached (the `test` task carries the `-javaagent:` flag). The test SHALL register an in-process `InMemorySpanExporter` on the agent's `OpenTelemetry` global, reset that exporter in a `@BeforeEach` block, and assert:
+The `backend/` project SHALL include a Testcontainers integration test `backend/src/test/java/com/prodready/social/observability/TracingIT.java` that boots the full Spring context against a Testcontainers Postgres with the OTel Java agent attached (the `test` task carries the `-javaagent:` flag). The test SHALL assert:
 
-- the agent's `OpenTelemetry` global is registered and is NOT the no-op fallback (proves the agent attached and instrumented successfully);
-- one authenticated controller request emits exactly one `event.dataset=backend.access` JSON log line whose `trace.id` field is a non-blank 32-character lowercase hex string;
-- the same line's `span.id` field is a non-blank 16-character lowercase hex string;
-- a log event emitted from a thread *outside* any active span (for example, by submitting a no-op Runnable to a fresh `Thread`) carries no `trace.id` and no `span.id` field;
-- a `POST /api/v1/posts` request produces a child span whose name contains `PostService.create` (proves the agent picks up the slice-1 `@Timed` annotations as spans).
+- the agent's `OpenTelemetry` global is registered and is NOT the no-op fallback — verified by obtaining a `Tracer` from `GlobalOpenTelemetry.get()`, starting a span, and confirming its `SpanContext.isValid()` and that its trace id matches `^[0-9a-f]{32}$` and span id matches `^[0-9a-f]{16}$`;
+- one authenticated `GET /api/v1/auth/me` request emits exactly one `event.dataset=backend.access` JSON log line whose `trace.id` field is a non-blank 32-character lowercase hex string and whose `span.id` field is a non-blank 16-character lowercase hex string, with no top-level `trace_id` / `span_id` / `trace_flags` key;
+- a log event emitted from a thread *outside* any active span (a freshly-spawned `Thread`) carries no `trace.id`, no `span.id`, and no top-level `trace_id` / `span_id` key;
+- one authenticated `POST /api/v1/posts` request emits an access-log line carrying populated `trace.id` and `span.id` ECS fields (proves the endpoint that invokes the slice-1 `@Timed PostService.create` method is traced end-to-end).
+
+Capturing the agent-emitted span set by literal span name (e.g., asserting a span named `PostService.create` exists) is **explicitly deferred** in this slice: the production OTel Java agent installs `GlobalOpenTelemetry` at JVM start and its instrumentation modules cache `Tracer` references at module-load time, which makes the `opentelemetry-sdk-testing` `OpenTelemetryExtension` / `InMemorySpanExporter` swap pattern ineffective. A future change can revisit this once an agent extension JAR is wired (`OTEL_JAVAAGENT_EXTENSIONS=…`).
 
 The test SHALL NOT boot a Tempo container, SHALL NOT make any network call to `http://localhost:4318` or `http://localhost:3200`, and SHALL NOT depend on any service outside the `Testcontainers` Postgres + the in-process Spring context.
 

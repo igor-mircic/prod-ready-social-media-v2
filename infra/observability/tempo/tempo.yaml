@@ -1,0 +1,36 @@
+# Tempo single-binary config for local development.
+#
+# Local-filesystem WAL + blocks storage is a learning-project default;
+# production would back Tempo with object storage (S3 / GCS / Azure Blob)
+# under the `storage.trace.backend: s3` (or equivalent) family.
+
+server:
+  http_listen_address: 0.0.0.0
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    # 1-hour retention is intentional: this is local dev, traces are
+    # eyeballed within minutes of being emitted. Production retention is
+    # measured in days and lives in object storage.
+    block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks

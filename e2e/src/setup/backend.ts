@@ -26,7 +26,9 @@ export interface BackendHandle {
 
 function resolveJarPath(): string {
   const pattern = resolve(REPO_ROOT, 'backend/build/libs/*.jar')
-  const matches = globSync(pattern).filter((p) => !p.endsWith('-plain.jar'))
+  const matches = globSync(pattern).filter(
+    (p) => !p.endsWith('-plain.jar') && !p.endsWith('opentelemetry-javaagent.jar'),
+  )
   if (matches.length === 0) {
     throw new Error(
       `No backend JAR found at ${pattern}. Run \`./gradlew bootJar\` in backend/ first.`,
@@ -38,6 +40,13 @@ function resolveJarPath(): string {
     )
   }
   return matches[0]!
+}
+
+function resolveOtelAgentPath(): string {
+  // The `bootJar` task in backend/build.gradle.kts depends on
+  // `copyOtelAgentForBootJar`, which deposits the agent JAR alongside the
+  // application JAR at this stable path.
+  return resolve(REPO_ROOT, 'backend/build/libs/opentelemetry-javaagent.jar')
 }
 
 async function waitForHealth(url: string): Promise<void> {
@@ -62,12 +71,13 @@ async function waitForHealth(url: string): Promise<void> {
 
 export async function startBackend(config: BackendConfig): Promise<BackendHandle> {
   const jar = resolveJarPath()
+  const otelAgent = resolveOtelAgentPath()
   const url = `http://127.0.0.1:${BACKEND_PORT}`
   const jdbcUrl = `jdbc:postgresql://${config.postgresHost}:${config.postgresPort}/${config.postgresDatabase}`
 
   const child = spawn(
     'java',
-    ['-jar', jar, `--server.port=${BACKEND_PORT}`],
+    [`-javaagent:${otelAgent}`, '-jar', jar, `--server.port=${BACKEND_PORT}`],
     {
       stdio: ['ignore', 'inherit', 'inherit'],
       env: {
@@ -83,6 +93,17 @@ export async function startBackend(config: BackendConfig): Promise<BackendHandle
         // refresh-on-401 e2e proof can lapse the access token within a
         // Playwright test budget. Scoped to the e2e harness only.
         APP_AUTH_ACCESS_TOKEN_TTL: 'PT2S',
+        // OTel agent defaults. The e2e run does not stand up Tempo; the
+        // agent's OTLP exporter logs a connection-refused warning and
+        // continues — span emission is verified by TracingIT, not e2e.
+        OTEL_SERVICE_NAME: 'backend',
+        OTEL_RESOURCE_ATTRIBUTES:
+          'service.environment=local,deployment.environment=local',
+        OTEL_TRACES_EXPORTER: 'otlp',
+        OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
+        OTEL_METRICS_EXPORTER: 'none',
+        OTEL_LOGS_EXPORTER: 'none',
       },
     },
   )

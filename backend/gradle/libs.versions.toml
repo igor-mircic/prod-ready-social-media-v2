@@ -6,6 +6,8 @@ googleJavaFormat = "1.29.0"
 springdocOpenApi = "2.8.6"
 springdocOpenApiPlugin = "1.9.0"
 springSecurityCrypto = "6.5.1"
+opentelemetryJavaagent = "2.10.0"
+opentelemetryApi = "1.43.0"
 
 [libraries]
 spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
@@ -21,6 +23,9 @@ spring-security-crypto = { module = "org.springframework.security:spring-securit
 
 flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql" }
 postgresql = { module = "org.postgresql:postgresql" }
+
+opentelemetry-javaagent = { module = "io.opentelemetry.javaagent:opentelemetry-javaagent", version.ref = "opentelemetryJavaagent" }
+opentelemetry-api = { module = "io.opentelemetry:opentelemetry-api", version.ref = "opentelemetryApi" }
 
 spring-boot-starter-actuator-test = { module = "org.springframework.boot:spring-boot-starter-actuator-test" }
 spring-boot-starter-data-jpa-test = { module = "org.springframework.boot:spring-boot-starter-data-jpa-test" }
