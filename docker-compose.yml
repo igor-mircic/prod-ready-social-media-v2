@@ -7,8 +7,9 @@
 #
 # Start with: docker-compose up -d postgres
 #
-# Opt-in observability stack (Prometheus + Grafana, default off):
-#   docker-compose --profile observability up -d prometheus grafana
+# Opt-in observability stack (Prometheus + Grafana + Tempo + Collector + Loki,
+# default off):
+#   docker-compose --profile observability up -d
 #
 # Credentials below match the backend's default Spring profile in
 # backend/src/main/resources/application.yaml. Override either side via the
@@ -56,6 +57,8 @@ services:
     depends_on:
       - prometheus
       - tempo
+      - loki
+      - collector
 
   tempo:
     image: grafana/tempo:2.6.1
@@ -64,10 +67,28 @@ services:
     command: ["-config.file=/etc/tempo.yaml"]
     ports:
       - "3200:3200"
+    volumes:
+      - ./infra/observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: social-collector
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    ports:
       - "4317:4317"
       - "4318:4318"
     volumes:
-      - ./infra/observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - ./infra/observability/collector/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./infra/observability/logs:/var/log/backend:ro
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: social-loki
+    profiles: ["observability"]
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./infra/observability/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
 
 volumes:
   postgres-data:

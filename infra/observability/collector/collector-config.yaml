@@ -1,0 +1,79 @@
+# OpenTelemetry Collector config for local-dev observability.
+#
+# Two pipelines:
+# - traces: OTLP receiver  -> batch -> Tempo (otlp/tempo exporter).
+# - logs:   filelog receiver -> batch -> Loki (loki exporter).
+#
+# The OTel Java agent ships traces to host port 4318 (unchanged from
+# slice 3 — only the container behind the port changes: the Collector
+# now, instead of Tempo direct). The backend writes ECS JSON log lines
+# to /var/log/backend/*.json (bind-mounted from
+# ./infra/observability/logs on the host) when the developer exports
+# LOG_FILE_PATH before ./gradlew bootRun. The filelog receiver tails
+# that glob and the loki exporter pushes each line to Loki.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  filelog:
+    include:
+      - /var/log/backend/*.json
+    start_at: beginning
+    operators:
+      # Parse each line as JSON; ECS fields land flat in attributes (nested
+      # objects stay nested — e.g. attributes["service"]["name"]).
+      - type: json_parser
+        parse_from: body
+
+      # Promote exactly three low-cardinality ECS fields to flat attributes
+      # named with the dotted ECS names. The loki exporter, via the
+      # `loki.attribute.labels` hint below, turns those three (and only
+      # those three) into Loki labels. Everything else — including the
+      # high-cardinality `request.id`, `user.id`, `trace.id`, `span.id` —
+      # stays inside the JSON body and is queried via `| json` at read
+      # time, so Loki label cardinality stays bounded.
+      - type: copy
+        from: attributes["service"]["name"]
+        to: attributes["service_name"]
+      - type: copy
+        from: attributes["event"]["dataset"]
+        to: attributes["event.dataset"]
+      - type: copy
+        from: attributes["log"]["level"]
+        to: attributes["log.level"]
+      - type: add
+        field: attributes["loki.attribute.labels"]
+        value: "service_name, event.dataset, log.level"
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    # Disable the exporter's default labels (`exporter`, `job`); the three
+    # labels above are the entire promoted set.
+    default_labels_enabled:
+      exporter: false
+      job: false
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [filelog]
+      processors: [batch]
+      exporters: [loki]

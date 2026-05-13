@@ -160,7 +160,7 @@ fields. The MDC keys the agent populates (Logstash-style `trace_id`,
  "message":"","ecs":{"version":"8.11"}}
 ```
 
-Manual log-to-trace correlation today is a copy-paste:
+Manual log-to-trace correlation works as a copy-paste:
 
 1. `jq -c 'select(.url.path == "/api/v1/auth/me")'` over `bootRun` stdout to
    find the request's access-log line.
@@ -169,9 +169,53 @@ Manual log-to-trace correlation today is a copy-paste:
    `Tempo`, paste the trace id into the search box, hit run — the span tree
    for that request renders.
 
-The auto-link (click `trace.id` in a log line, jump to Tempo) lands in slice
-4 once Loki is provisioned as the log datasource — Grafana's `tracesToLogs`
-correlation block needs a log datasource to point at.
+The one-click `tracesToLogs` and `logsToTraces` pivots (no copy-paste) are
+wired by the `### Log shipping` subsection below.
+
+### Log shipping
+
+The same compose profile that brings up Prometheus, Grafana, and Tempo also
+brings up an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
+and [Loki](https://grafana.com/oss/loki/):
+
+```sh
+docker-compose --profile observability up -d
+```
+
+The Collector replaces Tempo as the listener on host ports `4317` and
+`4318`. The OTel agent's `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
+is unchanged — only the container behind the port differs. Tempo's
+`http://localhost:3200` HTTP API binding stays for direct curl debugging;
+Tempo's OTLP host port bindings are retired in favour of the Collector
+(Tempo is now reachable only as `tempo:4317` inside the docker network).
+
+To enable the file appender the Collector tails, export `LOG_FILE_PATH`
+before starting the backend:
+
+```sh
+export LOG_FILE_PATH=./infra/observability/logs/backend.json
+./gradlew :backend:bootRun
+```
+
+With `LOG_FILE_PATH` set, the backend writes the same ECS JSON to that file
+alongside its stdout output. The Collector's `filelog` receiver tails the
+host directory (bind-mounted into the Collector container) and ships each
+line to Loki. Without `LOG_FILE_PATH` set, the file appender does not
+engage and the dev loop is byte-identical to the slice 2 / slice 3 default.
+
+In Grafana:
+
+- **`logsToTraces`** (Loki → Tempo): a `trace.id` value in any Loki log
+  line renders as a clickable link; clicking it opens the matching Tempo
+  span tree.
+- **`tracesToLogs`** (Tempo → Loki): from a Tempo span view, the "Logs for
+  this span" link opens the matching Loki log lines, scoped by `trace.id`.
+- The slice-3 manual workflow ("copy `trace.id` and paste into Tempo
+  search") still works, but is no longer necessary.
+
+The host directory (`./infra/observability/logs/`) is committed (with a
+`.gitkeep` placeholder) so the Collector's bind-mount target exists on a
+fresh clone; the `*.json` content in that directory is gitignored.
 
 ## Prerequisites
 

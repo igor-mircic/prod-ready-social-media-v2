@@ -36,3 +36,8 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Local backend log output (file appender enabled via LOG_FILE_PATH).
+# The directory itself is committed (with .gitkeep) so the docker-compose
+# Collector bind-mount target exists on a fresh clone.
+infra/observability/logs/*.json
