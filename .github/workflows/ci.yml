@@ -157,13 +157,31 @@ jobs:
           restore-keys: |
             playwright-${{ runner.os }}-${{ matrix.browser }}-
 
-      - name: Install Playwright browser (${{ matrix.browser }})
+      - name: Install Playwright browser binaries (${{ matrix.browser }})
         uses: nick-fields/retry@v3
         with:
-          timeout_minutes: 10
+          timeout_minutes: 3
           max_attempts: 2
           retry_on: any
-          command: cd e2e && pnpm exec playwright install --with-deps ${{ matrix.browser }}
+          command: cd e2e && pnpm exec playwright install ${{ matrix.browser }}
+
+      - name: Install Playwright system deps (${{ matrix.browser }})
+        working-directory: e2e
+        run: |
+          set -e
+          for attempt in 1 2; do
+            echo "::group::install-deps attempt $attempt of 2"
+            if sudo --preserve-env=PATH timeout --signal=TERM --kill-after=30s 10m pnpm exec playwright install-deps ${{ matrix.browser }}; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            rc=$?
+            echo "::endgroup::"
+            echo "Attempt $attempt failed (rc=$rc); retrying after 5s"
+            sleep 5
+          done
+          echo "All 2 install-deps attempts failed"
+          exit 1
 
       - name: Run Playwright (${{ matrix.browser }})
         working-directory: e2e
