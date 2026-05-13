@@ -204,6 +204,14 @@ jobs:
 
       - name: Run Playwright (${{ matrix.browser }})
         working-directory: e2e
+        env:
+          # Firefox refuses to launch as root when $HOME is owned by
+          # a different user (GitHub Actions sets HOME=/github/home,
+          # which is owned by pwuser uid 1000 — not root inside the
+          # container). Pointing HOME at /root, which root owns, lets
+          # firefox launch. Documented as the supported workaround in
+          # Playwright's own error message.
+          HOME: /root
         run: pnpm exec playwright test --project=${{ matrix.browser }}
 
       - name: Upload Playwright artifacts
