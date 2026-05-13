@@ -2,15 +2,15 @@
 
 ## 1. CI workflow: wrap the install step in `nick-fields/retry@v3`
 
-- [ ] 1.1 Open `.github/workflows/ci.yml`. Locate the `Install
+- [x] 1.1 Open `.github/workflows/ci.yml`. Locate the `Install
   Playwright browser (${{ matrix.browser }})` step in the `e2e` job
   (currently at lines 160-162).
-- [ ] 1.2 Replace the step body with a `uses: nick-fields/retry@v3`
+- [x] 1.2 Replace the step body with a `uses: nick-fields/retry@v3`
   invocation. Keep the step `name:` identical to the current value
   (`Install Playwright browser (${{ matrix.browser }})`) so existing
   run-history greps still match and the run-summary line is
   unchanged.
-- [ ] 1.3 Configure the action's inputs:
+- [x] 1.3 Configure the action's inputs:
   - `timeout_minutes: 5` — per-attempt timeout. Per `design.md`
     Decision 2.
   - `max_attempts: 3` — bounded retry count. Per `design.md`
@@ -21,23 +21,23 @@
     ${{ matrix.browser }}` — the cwd-change is inlined because the
     action does not honour the surrounding step's `working-directory`.
     Per `design.md` Decision 6.
-- [ ] 1.4 Do NOT add a step-level `timeout-minutes:` on the wrapping
+- [x] 1.4 Do NOT add a step-level `timeout-minutes:` on the wrapping
   step. The action's `timeout_minutes × max_attempts` budget already
   bounds the wall-clock spend, and an outer `timeout-minutes` would
   double the budget. Per `design.md` Open Question 1.
-- [ ] 1.5 Do NOT touch the `Cache Playwright browsers
+- [x] 1.5 Do NOT touch the `Cache Playwright browsers
   (${{ matrix.browser }})` step at lines 152-159. Its key,
   restore-keys, and path are correct as-is and are explicitly
   preserved by the modified spec requirement.
-- [ ] 1.6 Do NOT touch any other step in the `e2e` job. In particular,
+- [x] 1.6 Do NOT touch any other step in the `e2e` job. In particular,
   the `Run Playwright (${{ matrix.browser }})` step is unchanged.
 
 ## 2. Local sanity check on the workflow file
 
-- [ ] 2.1 Run `actionlint` (or equivalent YAML/Actions linter) on
+- [x] 2.1 Run `actionlint` (or equivalent YAML/Actions linter) on
   `.github/workflows/ci.yml` and confirm there are no syntax or
   schema warnings introduced by the new step.
-- [ ] 2.2 Visually confirm the diff against the existing workflow:
+- [x] 2.2 Visually confirm the diff against the existing workflow:
   exactly one step (the install step) changed; no `runs-on`,
   `services`, `strategy`, or other job-level change.
 
@@ -84,7 +84,7 @@
 
 ## 6. Documentation: none required
 
-- [ ] 6.1 README is not updated. The install step is an
+- [x] 6.1 README is not updated. The install step is an
   implementation detail of CI, not a developer-facing surface. The
   spec delta in `specs/ci/spec.md` carries the requirement language;
   no separate doc is needed.
