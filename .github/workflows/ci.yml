@@ -118,10 +118,16 @@ jobs:
       PLAYWRIGHT_VERSION: 1.59.1
     container:
       image: mcr.microsoft.com/playwright:v1.59.1-noble
-      # Bind-mount the host Docker socket so the harness's
-      # `globalSetup` can spawn a Testcontainers Postgres as a
-      # sibling of this container (sibling-container DinD pattern).
-      options: --volume /var/run/docker.sock:/var/run/docker.sock
+      # `--user root`: firefox refuses to launch when $HOME (set by
+      # GitHub Actions to `/github/home`) is owned by a different UID
+      # than the current user; running as root sidesteps the ownership
+      # mismatch between the runner's host UID and the image's
+      # default `pwuser` (uid 1000).
+      # `--volume /var/run/docker.sock`: bind-mount the host Docker
+      # socket so the harness's `globalSetup` can spawn a
+      # Testcontainers Postgres as a sibling of this container
+      # (sibling-container DinD pattern).
+      options: --user root --volume /var/run/docker.sock:/var/run/docker.sock
     strategy:
       fail-fast: false
       matrix:
