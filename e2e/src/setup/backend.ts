@@ -93,17 +93,24 @@ export async function startBackend(config: BackendConfig): Promise<BackendHandle
         // refresh-on-401 e2e proof can lapse the access token within a
         // Playwright test budget. Scoped to the e2e harness only.
         APP_AUTH_ACCESS_TOKEN_TTL: 'PT2S',
-        // OTel agent defaults. The e2e run does not stand up Tempo; the
-        // agent's OTLP exporter logs a connection-refused warning and
-        // continues — span emission is verified by TracingIT, not e2e.
-        OTEL_SERVICE_NAME: 'backend',
+        // OTel agent defaults. Each yields to the parent env when set
+        // (e.g. CI exports `OTEL_TRACES_EXPORTER=none` to silence the
+        // exporter retries against a non-existent collector). When the
+        // parent env is clean, the harness's defaults take effect and
+        // the agent's OTLP exporter logs a connection-refused warning
+        // and continues — span emission is verified by TracingIT, not
+        // e2e, so the warning is acceptable noise in that path.
+        OTEL_SERVICE_NAME: process.env.OTEL_SERVICE_NAME ?? 'backend',
         OTEL_RESOURCE_ATTRIBUTES:
+          process.env.OTEL_RESOURCE_ATTRIBUTES ??
           'service.environment=local,deployment.environment=local',
-        OTEL_TRACES_EXPORTER: 'otlp',
-        OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
-        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://localhost:4318',
-        OTEL_METRICS_EXPORTER: 'none',
-        OTEL_LOGS_EXPORTER: 'none',
+        OTEL_TRACES_EXPORTER: process.env.OTEL_TRACES_EXPORTER ?? 'otlp',
+        OTEL_EXPORTER_OTLP_PROTOCOL:
+          process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? 'http/protobuf',
+        OTEL_EXPORTER_OTLP_ENDPOINT:
+          process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? 'http://localhost:4318',
+        OTEL_METRICS_EXPORTER: process.env.OTEL_METRICS_EXPORTER ?? 'none',
+        OTEL_LOGS_EXPORTER: process.env.OTEL_LOGS_EXPORTER ?? 'none',
       },
     },
   )
