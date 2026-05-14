@@ -12,6 +12,7 @@ import {
 import { refreshOnce, setAccessTokenGetter, setRefreshHandlers } from '../../api/client'
 import { me } from '../../api/generated/queries/auth-controller/auth-controller'
 import type { UserResponse } from '../../api/generated/queries/openAPIDefinition.schemas'
+import { setCurrentUserId } from '../../observability/user-context'
 
 export type CurrentUser = Pick<UserResponse, 'id' | 'email' | 'displayName' | 'createdAt'>
 
@@ -57,12 +58,14 @@ export function AuthProvider({ children, onSessionExpired }: AuthProviderProps) 
     moduleAccessToken = token
     setAccessTokenState(token)
     setCurrentUser(user)
+    setCurrentUserId(user.id ?? null)
   }, [])
 
   const logout = useCallback(() => {
     moduleAccessToken = null
     setAccessTokenState(null)
     setCurrentUser(null)
+    setCurrentUserId(null)
   }, [])
 
   useEffect(() => {
@@ -97,6 +100,7 @@ export function AuthProvider({ children, onSessionExpired }: AuthProviderProps) 
               displayName: meResult.data.displayName,
               createdAt: meResult.data.createdAt,
             })
+            setCurrentUserId(meResult.data.id ?? null)
           }
         } catch {
           // Leave unauthenticated on /me failure.
@@ -107,6 +111,7 @@ export function AuthProvider({ children, onSessionExpired }: AuthProviderProps) 
         moduleAccessToken = null
         setAccessTokenState(null)
         setCurrentUser(null)
+        setCurrentUserId(null)
         onSessionExpiredRef.current?.()
       })
       setBooting(false)

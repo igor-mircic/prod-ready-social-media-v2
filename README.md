@@ -344,10 +344,97 @@ Open the app in a tab, click around for a few seconds, and the
 Frontend overview dashboard's panels start filling in within one
 export + scrape cycle (≤ 30 s).
 
-Frontend errors (React error boundary events, `window.onerror`,
-`unhandledrejection`) and FE-plus-BE alerting / SLO definitions
-are the natural follow-up slices — they layer on top of both this
-metrics path and the slice-5 trace path.
+Frontend errors are covered in the next subsection. FE-plus-BE
+alerting / SLO definitions are the natural follow-up slice — it
+layers on top of this metrics path, the slice-5 trace path, and
+the slice-7 error path.
+
+### Frontend errors
+
+The frontend captures every uncaught browser exception across four
+canonical surfaces and fans each one out to three observability
+sinks via the same OTel Collector slice 5 and 6 already use:
+
+- **React error boundary** — a top-level `<FrontendErrorBoundary>`
+  wraps `<App />` in `main.tsx`; render-time exceptions are caught
+  via `componentDidCatch` and recorded with `kind="boundary"`.
+- **`window.error`** — synchronous uncaught JS exceptions and
+  resource-load failures (`kind="error"`).
+- **`window.unhandledrejection`** — fire-and-forget promise
+  rejections (`kind="rejection"`).
+- **`window.securitypolicyviolation`** — CSP violation events,
+  future-proofing for when a CSP is configured (`kind="csp"`).
+
+Each captured error fans out to three sinks:
+
+- a `span.recordException` event on the active OTel span (Tempo);
+- a structured OTel log record with ECS attributes emitted via
+  `@opentelemetry/sdk-logs` to the Collector and routed to Loki
+  under `event.dataset=frontend.error`;
+- a `frontend_errors_total{kind, route}` counter increment
+  (Prometheus via the slice-6 metrics pipeline).
+
+Opt in with the same gate as slices 5 and 6:
+
+```sh
+cd frontend && VITE_OTEL_ENABLED=true pnpm dev
+```
+
+A fourth confirmation line lands on the devtools console at boot:
+
+```
+OTel telemetry enabled: logs → http://localhost:4318/v1/logs
+```
+
+Wire path:
+
+1. The browser SDK POSTs OTLP/HTTP log records to
+   `http://localhost:4318/v1/logs` (the same Collector receiver as
+   slice 5/6).
+2. The Collector's `logs/frontend` pipeline filters to
+   `resource.service.name=frontend` (defence-in-depth against a
+   future BE-via-OTLP migration), runs the `transform/pii_scrub`
+   processor — a regex backstop redacting JWT, email, and bearer-
+   token-shaped substrings to `[REDACTED]` — and promotes
+   `event.dataset` + `service.name` to Loki labels.
+3. Loki ingests under `{event_dataset="frontend.error",
+   service_name="frontend"}` alongside the BE access log under
+   `{event_dataset="backend.access"}`.
+4. Grafana's Frontend overview dashboard gains an Errors row at
+   `http://localhost:3000/d/frontend-overview` — three panels:
+   error rate by `kind`, top fingerprints (Loki), and CSP
+   violations.
+
+**Dedup + rate cap (SDK-side):** a render-loop pathology can fire
+the same exception thousands of times per minute. The SDK
+fingerprints each captured error as
+`<type>:<first stackframe path>:<line>` and suppresses the
+event-shaped sinks (span event, log record) for any fingerprint
+that fired within the last **5 s** (`VITE_FE_ERROR_DEDUP_WINDOW_MS`
+override), or any further events after **30 per rolling 60 s**
+(`VITE_FE_ERROR_RATE_LIMIT` override). The
+`frontend_errors_total` counter is **never** gated — aggregate
+counts stay accurate even when example surfaces drop.
+
+**PII (defence-in-depth):** the SDK strips JWT, email, and bearer-
+token-shaped substrings from `error.message` and
+`error.stack_trace` before export. The Collector's
+`transform/pii_scrub` processor re-applies the same three regexes
+over `attributes.error.message`, `attributes.error.stack_trace`,
+and `body` — a last-line guard for any third-party library
+exception the SDK regex missed. The patterns live in
+`frontend/src/observability/error-sink.ts` (`PII_REGEXES`) and
+`infra/observability/collector/collector-config.yaml`
+(`transform/pii_scrub`); they must move together.
+
+**Source-map symbolication:** explicitly **out of scope** for
+this slice. Built bundles produce munged stack frames; in local
+dev Vite serves unminified bundles so frames are already
+readable. A dedicated symbolication slice (build-pipeline upload
++ symbol store + Grafana plugin) is queued before any real-server
+deploy — see `project_source_maps_pre_deploy.md` in the
+auto-memory and the **Open Follow-ups** section of
+`openspec/changes/add-frontend-errors/design.md`.
 
 ## Prerequisites
 

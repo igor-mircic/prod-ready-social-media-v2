@@ -108,6 +108,22 @@ jobs:
         working-directory: frontend
         run: pnpm build
 
+      # Slice-7 production-bundle guard: the dev-only `/__dev/throw`
+      # route is wrapped in an `import.meta.env.DEV` conditional in
+      # `App.tsx`. Vite tree-shakes that branch out of production
+      # builds, so no built asset should reference the path. A grep
+      # over `frontend/dist/assets/*.js` is the cheapest, most direct
+      # check that the gate held. If this ever fails, the route would
+      # otherwise be reachable in a real-server deploy.
+      - name: Assert dev-only throw route absent from production bundle
+        working-directory: frontend
+        run: |
+          if grep -r '__dev/throw' dist/assets/ 2>/dev/null; then
+            echo "::error::Dev-only /__dev/throw route leaked into production bundle. Verify the import.meta.env.DEV gate in App.tsx."
+            exit 1
+          fi
+          echo "OK: /__dev/throw not present in dist/assets/"
+
       - name: Upload frontend dist
         uses: actions/upload-artifact@v4
         with:
