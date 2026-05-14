@@ -87,6 +87,12 @@ services:
     container_name: social-loki
     profiles: ["observability"]
     command: ["-config.file=/etc/loki/local-config.yaml"]
+    # Expose 3100 on the host so e2e specs (and ad-hoc curl debugging)
+    # can hit Loki's HTTP API directly without going through Grafana.
+    # Grafana's Tempo→Loki tracesToLogs pivot uses the container DNS
+    # name (`http://loki:3100`) regardless of host port mapping.
+    ports:
+      - "3100:3100"
     volumes:
       - ./infra/observability/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
 
