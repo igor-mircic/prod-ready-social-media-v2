@@ -217,6 +217,69 @@ The host directory (`./infra/observability/logs/`) is committed (with a
 `.gitkeep` placeholder) so the Collector's bind-mount target exists on a
 fresh clone; the `*.json` content in that directory is gitignored.
 
+### Frontend tracing
+
+The frontend ships an opt-in OpenTelemetry Web SDK that boots before
+React renders. With telemetry enabled, every user click and form submit
+becomes a span, and every outbound fetch to the backend carries a W3C
+`traceparent` header so the Tempo trace tree starts in the browser and
+continues seamlessly into the backend's controller and JDBC spans —
+one `trace.id`, one trace, two `service.name` values (`frontend` and
+`backend`).
+
+Opt in by exporting `VITE_OTEL_ENABLED=true` before starting the dev
+server (the default `pnpm dev` invocation stays unchanged):
+
+```sh
+cd frontend && VITE_OTEL_ENABLED=true pnpm dev
+```
+
+On boot, the devtools console writes exactly one confirmation line:
+
+```
+OTel telemetry enabled: traces → http://localhost:4318/v1/traces
+```
+
+The default exporter URL points at the OTel Collector's OTLP/HTTP
+receiver published from the observability profile; override it with
+`VITE_OTEL_TRACES_ENDPOINT` if you front the Collector with a different
+host. The Collector's `:4318` receiver carries a `cors` block that
+allowlists the Vite dev (`http://localhost:5173`) and preview
+(`http://localhost:4173`) origins, so the browser POST succeeds
+without a proxy.
+
+Click-to-trace, in Grafana → Explore → Tempo:
+
+1. Click the post composer's `Post` button (or any UI button that
+   fires a `useMutation`).
+2. In Tempo search, filter by `{ resource.service.name = "frontend" }`
+   and find the most recent trace. Its root span is the
+   `UserInteractionInstrumentation`-emitted click; the next span is
+   `FetchInstrumentation`'s `POST /api/v1/posts`; the children below
+   are the backend's controller, `@Timed`, and JDBC spans
+   (`{ resource.service.name = "backend" }`).
+3. From the same trace, click the `Logs for this span` data link on
+   any backend span — Loki returns the ECS log line that carries the
+   same `trace.id`.
+4. Switch Tempo's view to `Service Graph` (provisioned in
+   `infra/observability/grafana/provisioning/datasources/tempo.yaml`
+   via the `serviceMap` block) to see the `frontend → backend` edge
+   after a few requests have flowed through.
+
+`traceparent` propagation is **scoped to the backend origin** —
+`http://localhost:8080` in dev and any URL whose origin matches
+`VITE_API_BASE_URL` at build time. The browser SDK does **not** send
+`traceparent` or `tracestate` to third-party hosts (CDNs, fonts,
+analytics). The Collector's `transform/redact-path-ids` processor
+rewrites high-cardinality path segments (UUIDs, opaque hex, numeric
+ids) to the literal `{id}` on both FE and BE spans before they reach
+Tempo.
+
+Frontend RUM metrics (Web Vitals: LCP, INP, CLS) and frontend errors
+(window errors, unhandled rejections, React error boundary events)
+are the natural follow-up slices — they will layer on top of the
+trace propagation this slice establishes.
+
 ## Prerequisites
 
 - Java 21
