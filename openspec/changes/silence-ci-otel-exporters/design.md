@@ -153,6 +153,17 @@ unconditional `.environment(k, v)` calls violate that wording.
 Adding the `System.getenv(k) == null` guard fixes the bug and
 makes the spec's overridability contract verifiable.
 
+The e2e harness at `e2e/src/setup/backend.ts:99-106` has the
+same anti-pattern in a different language: it spreads
+`...process.env` into the spawn's env object and THEN lists
+the OTel keys with literal values, so the harness's defaults
+override parent env on the spawned JVM. Same fix in TypeScript:
+`OTEL_TRACES_EXPORTER: process.env.OTEL_TRACES_EXPORTER ?? 'otlp'`,
+so the harness's default applies only when the parent env did
+not name the key. The harness's harness-specific overrides
+(`SPRING_DATASOURCE_URL`, `APP_AUTH_*`) stay forced — they are
+intentionally not overridable from outside.
+
 **Alternative A: `JAVA_TOOL_OPTIONS=-Dotel.traces.exporter=none`
 at the workflow level.** OTel SDK reads JVM system properties as
 well as env vars, and system properties win over env vars in the

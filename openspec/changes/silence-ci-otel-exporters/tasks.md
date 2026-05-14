@@ -14,6 +14,11 @@
 - [x] 2b.1 In `backend/build.gradle.kts`, gate the `otelEnvDefaults.forEach { (k, v) -> environment(k, v) }` block in both the `bootRun` and `test` task configurations on `System.getenv(k) == null`, so the defaults only apply when the parent env has not already named the key. Keep the existing comment about the defaults being "overridable by a real env var when running outside Gradle" — and refresh it to note that overridability now holds inside Gradle too.
 - [ ] 2b.2 Confirm `./gradlew test` from `backend/` still passes locally — proves the test JVM still gets the defaults when the parent shell has no `OTEL_*` exports.
 
+## 2c. e2e harness — honour parent-env OTEL_* overrides on the bootJar spawn
+
+- [x] 2c.1 In `e2e/src/setup/backend.ts`, change each `OTEL_*` literal in the `startBackend()` `env:` block from `OTEL_X: 'literal'` to `OTEL_X: process.env.OTEL_X ?? 'literal'`, so the harness's defaults yield to whatever the parent env named. Leave the non-OTel overrides (`SPRING_DATASOURCE_URL`, `APP_AUTH_REFRESH_COOKIE_SECURE`, `APP_AUTH_ACCESS_TOKEN_TTL`) unchanged — those are intentionally harness-controlled.
+- [x] 2c.2 Refresh the inline comment block (currently lines 96-98) so it no longer claims "the agent's OTLP exporter logs a connection-refused warning and continues" — under the fix, parent env may override `OTEL_TRACES_EXPORTER` to `none` and silence the exporter entirely.
+
 ## 3. CI — smoke against the empirical log
 
 - [ ] 3.1 Push the change to a feature branch and open its pull request.

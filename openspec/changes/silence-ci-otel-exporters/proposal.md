@@ -44,6 +44,15 @@ fix is to tell the agent not to export at all in CI.
   springdoc JVMs. No change to local dev: developers do not export
   `OTEL_TRACES_EXPORTER` in their shell, so the build's defaults still
   apply there.
+- **e2e harness — `setup/backend.ts` honours parent-env OTEL_*
+  overrides on the bootJar spawn.** The harness's `startBackend()`
+  spreads `...process.env` and THEN lists the OTel keys with literal
+  values, so its defaults override parent env on the spawned JVM
+  (same anti-pattern as `build.gradle.kts`). Switch each `OTEL_*`
+  literal to a `process.env[k] ?? "<default>"` form so the harness's
+  defaults only apply when the parent env did not name the key. No
+  change to the harness's harness-specific overrides
+  (`SPRING_DATASOURCE_URL`, `APP_AUTH_*`) — those remain forced.
 
 ### Explicit non-goals (deferred to follow-ups)
 
@@ -91,8 +100,11 @@ fix is to tell the agent not to export at all in CI.
   `otelEnvDefaults` loop now skips keys already set in the parent
   env, so the CI workflow's overrides actually reach the forked
   test / springdoc JVMs.
-- **Backend, frontend, e2e source code:** No changes (the build
-  script is build config, not application source).
+- **e2e harness:** Modified — `e2e/src/setup/backend.ts`'s
+  `startBackend()` spawn now gates each OTel default on the parent
+  env so the workflow's overrides reach the bootJar JVM the harness
+  spawns.
+- **Backend, frontend source code:** No changes.
 - **Dependencies (npm / Gradle):** No changes.
 - **Database:** No migrations. No schema changes.
 - **Local dev loop:** No changes. Developers do not export
