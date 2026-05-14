@@ -1,7 +1,7 @@
 # OpenTelemetry Collector config for local-dev observability.
 #
 # Two pipelines:
-# - traces: OTLP receiver  -> batch -> Tempo (otlp/tempo exporter).
+# - traces: OTLP receiver  -> batch -> redact-path-ids -> Tempo (otlp/tempo exporter).
 # - logs:   filelog receiver -> batch -> Loki (loki exporter).
 #
 # The OTel Java agent ships traces to host port 4318 (unchanged from
@@ -11,6 +11,13 @@
 # ./infra/observability/logs on the host) when the developer exports
 # LOG_FILE_PATH before ./gradlew bootRun. The filelog receiver tails
 # that glob and the loki exporter pushes each line to Loki.
+#
+# Slice 5 (add-frontend-traces) adds:
+#   - CORS on the OTLP/HTTP receiver so the browser SDK can POST spans
+#     direct from the Vite dev/preview origins.
+#   - A `transform/redact-path-ids` processor that replaces high-
+#     cardinality path segments (UUIDs, opaque hex, numeric ids) on
+#     both FE and BE spans before they reach Tempo.
 
 receivers:
   otlp:
@@ -19,6 +26,12 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://localhost:5173
+            - http://localhost:4173
+          allowed_headers:
+            - "*"
 
   filelog:
     include:
@@ -53,6 +66,37 @@ receivers:
 processors:
   batch: {}
 
+  # Slice 5 redaction: replace high-cardinality path segments with the
+  # literal token `{id}` in span name, `http.url`, `http.target`, and
+  # `url.full` (where present). Applies to spans from any `service.name`
+  # value — no `where` clause filters by service. Patterns, in order:
+  #   1. UUID v4 (lowercase hex with hyphens) — no bounding needed; the
+  #      hyphenated shape is unambiguous.
+  #   2. opaque hex segments of length 8 or more, bounded on both sides
+  #      by `/` or end-of-string. The trailing delimiter is captured
+  #      and re-emitted (`$$1`) because Go's RE2 has no lookahead.
+  #   3. numeric segments of length 4 or more, bounded as above.
+  # UUID must come first so its hex form is not eaten by the opaque-
+  # hex rule. The replacement is intentionally uniform (`{id}`) so
+  # operators query by route template, not by id value. `$$1` is OTTL
+  # escape syntax for a literal `$1` capture-group backreference.
+  transform/redact-path-ids:
+    trace_statements:
+      - context: span
+        statements:
+          - replace_pattern(name, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}")
+          - replace_pattern(name, "/[0-9a-f]{8,}(/|$)", "/{id}$$1")
+          - replace_pattern(name, "/[0-9]{4,}(/|$)", "/{id}$$1")
+          - replace_pattern(attributes["http.url"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["http.url"] != nil
+          - replace_pattern(attributes["http.url"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["http.url"] != nil
+          - replace_pattern(attributes["http.url"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["http.url"] != nil
+          - replace_pattern(attributes["http.target"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["http.target"] != nil
+          - replace_pattern(attributes["http.target"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["http.target"] != nil
+          - replace_pattern(attributes["http.target"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["http.target"] != nil
+          - replace_pattern(attributes["url.full"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.full"] != nil
+          - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+          - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+
 exporters:
   otlp/tempo:
     endpoint: tempo:4317
@@ -71,7 +115,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [batch, transform/redact-path-ids]
       exporters: [otlp/tempo]
     logs:
       receivers: [filelog]

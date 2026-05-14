@@ -25,3 +25,10 @@ datasources:
         spanEndTimeShift: '1h'
         customQuery: true
         query: '{service_name="backend"} |~ `"trace\\.id":"${__span.traceId}"`'
+      # Slice 5 (add-frontend-traces) adds the Service Graph pivot. Grafana
+      # builds the graph by querying span-derived RED metrics from the
+      # Prometheus datasource — once browser-emitted spans land with
+      # `service.name=frontend`, the graph shows the `frontend → backend`
+      # edge in Explore → Tempo → Service Graph.
+      serviceMap:
+        datasourceUid: prometheus

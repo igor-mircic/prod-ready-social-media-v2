@@ -98,7 +98,7 @@ Spans SHALL NOT carry any resource attribute whose value is derived from request
 
 ### Requirement: OTel Collector OTLP/HTTP receiver allows CORS for Vite origins
 
-The file `infra/observability/otel-collector-config.yaml` SHALL declare a `cors` block on the `otlp` receiver's `http` protocol stanza with:
+The file `infra/observability/collector/collector-config.yaml` SHALL declare a `cors` block on the `otlp` receiver's `http` protocol stanza with:
 
 - `allowed_origins` containing at minimum `http://localhost:5173` (Vite dev) and `http://localhost:4173` (Vite preview),
 - `allowed_headers` containing at minimum `*` OR the explicit list `["Content-Type", "traceparent", "tracestate"]`.
@@ -107,7 +107,7 @@ The receiver SHALL continue to listen on `0.0.0.0:4318` and SHALL continue to ac
 
 #### Scenario: Collector config declares the CORS allowlist on the OTLP/HTTP receiver
 
-- **WHEN** a reader inspects `infra/observability/otel-collector-config.yaml`
+- **WHEN** a reader inspects `infra/observability/collector/collector-config.yaml`
 - **THEN** the file declares an `otlp` receiver with an `http` protocol stanza
 - **AND** that stanza contains a `cors` block
 - **AND** the `cors.allowed_origins` list includes both `http://localhost:5173` and `http://localhost:4173`.
@@ -128,7 +128,7 @@ The receiver SHALL continue to listen on `0.0.0.0:4318` and SHALL continue to ac
 
 ### Requirement: Collector redacts high-cardinality path segments from FE and BE spans
 
-The file `infra/observability/otel-collector-config.yaml` SHALL declare a `transform` processor (`transform/redact-path-ids` or equivalent name) that, on every span passing through the `traces/default` pipeline, replaces matches of the following patterns inside span name, `http.url`, `http.target`, and `url.full` (where present) with the literal token `{id}`:
+The file `infra/observability/collector/collector-config.yaml` SHALL declare a `transform` processor (`transform/redact-path-ids` or equivalent name) that, on every span passing through the `traces/default` pipeline, replaces matches of the following patterns inside span name, `http.url`, `http.target`, and `url.full` (where present) with the literal token `{id}`:
 
 - UUID v4 (lowercase hex with hyphens): `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
 - opaque hex segments of length 8 or more (`[0-9a-f]{8,}`) when bounded by `/` or end-of-string;
@@ -138,7 +138,7 @@ The processor SHALL be wired into the `traces/default` pipeline before the Tempo
 
 #### Scenario: Collector pipeline lists the redaction processor before the Tempo exporter
 
-- **WHEN** a reader inspects `infra/observability/otel-collector-config.yaml`
+- **WHEN** a reader inspects `infra/observability/collector/collector-config.yaml`
 - **THEN** the file declares a `transform/redact-path-ids` processor (or equivalent name)
 - **AND** the `service.pipelines.traces` (or `service.pipelines.traces/default`) `processors` list includes that processor
 - **AND** the processor appears before any Tempo exporter in the same pipeline's `exporters` evaluation order.
