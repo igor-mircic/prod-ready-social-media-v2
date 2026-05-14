@@ -14,6 +14,24 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Slice 8: SLO recording rules + multi-window multi-burn-rate alerting rules.
+# The compose mount maps `infra/observability/prometheus/rules/` (host) to
+# `/etc/prometheus/rules/` (container) read-only — see `docker-compose.yml`.
+# Editing rule files requires a `docker-compose --profile observability
+# restart prometheus` to pick up; restart instructions live in the README.
+rule_files:
+  - rules/slo-recording.yml
+  - rules/slo-alerting.yml
+
+# Slice 8: route firings to the Alertmanager container on the shared docker
+# network. The compose service name is `alertmanager`; its HTTP API is on
+# port 9093. (Published to host as `http://localhost:9093` for the UI.)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
 scrape_configs:
   - job_name: backend
     metrics_path: /actuator/prometheus

@@ -76,6 +76,36 @@ jobs:
       - name: Validate observability compose profile YAML
         run: docker compose --profile observability config -q
 
+  prometheus-rules:
+    name: prometheus (promtool test rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Slice 8: SLO recording/alerting rules + promtool test fixture.
+      # Running `promtool test rules` against the pinned prom/prometheus
+      # image is the executable spec for the alerting logic — it asserts
+      # that each multi-window multi-burn-rate alert fires under crafted
+      # synthetic series and that steady-state success doesn't fire any
+      # availability alert. The image tag MUST match the version pinned
+      # in `docker-compose.yml`'s `prometheus` service.
+      - name: Lint rule files (promtool check rules)
+        run: |
+          docker run --rm \
+            --entrypoint promtool \
+            -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+            prom/prometheus:v2.55.1 \
+            check rules /rules/slo-recording.yml /rules/slo-alerting.yml
+
+      - name: Run rule unit tests (promtool test rules)
+        run: |
+          docker run --rm \
+            --entrypoint promtool \
+            -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+            prom/prometheus:v2.55.1 \
+            test rules /rules/slo-tests.yml
+
   frontend:
     name: frontend (gen + test + build)
     runs-on: ubuntu-latest

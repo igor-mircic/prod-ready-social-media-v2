@@ -1,0 +1,218 @@
+# promtool test rules — executable spec for the alerting rules.
+#
+# Each entry in `tests:` is a self-contained scenario: it feeds crafted time
+# series, evaluates the rule files at a simulated eval_time, and asserts which
+# alerts are (or are NOT) in `firing` state. Run from the repo root with:
+#
+#   docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+#     prom/prometheus:v2.55.1 test rules /rules/slo-tests.yml
+#
+# The fixture mirrors the spec's scenarios one-for-one:
+#   - one firing test per multi-burn-rate alert (3 availability + 2×2 latency)
+#   - one steady-state non-firing test for availability
+#   - BackendDown firing + not-firing tests
+#
+# Note: alerts inherit the `job=backend` label from the recording rules they
+# reference, so exp_labels lists job alongside severity/slo. promtool defaults
+# exp_annotations to "no annotations", so each firing assertion includes the
+# rule's summary verbatim.
+rule_files:
+  - slo-recording.yml
+  - slo-alerting.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # 1. ApiAvailabilityFastBurn — 100% errors trips the 1h × 5m burn-rate pair.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="500"}'
+        values: '0+10x90'
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="200"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ApiAvailabilityFastBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: api_availability
+            exp_annotations:
+              summary: "API availability burning 30d budget very fast (fast-burn)."
+
+  # ---------------------------------------------------------------------------
+  # 2. ApiAvailabilitySlowBurn — 100% errors trips the 6h × 30m burn-rate pair.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="500"}'
+        values: '0+10x440'
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="200"}'
+        values: '0x440'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: ApiAvailabilitySlowBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: api_availability
+            exp_annotations:
+              summary: "API availability burning 30d budget fast (slow-burn page)."
+
+  # ---------------------------------------------------------------------------
+  # 3. ApiAvailabilityBudgetBurn — 100% errors sustained over the 3d × 6h pair.
+  # Long simulated time but lightweight in real-time (synthetic counter steps).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="500"}'
+        values: '0+10x4500'
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="200"}'
+        values: '0x4500'
+    alert_rule_test:
+      - eval_time: 74h
+        alertname: ApiAvailabilityBudgetBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: ticket
+              slo: api_availability
+            exp_annotations:
+              summary: "API availability burning 30d budget steadily (ticket)."
+
+  # ---------------------------------------------------------------------------
+  # 4. Steady-state: 24h of pure success traffic — none of the three availability
+  # alerts should fire.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="200"}'
+        values: '0+10x1500'
+      - series: 'http_server_requests_seconds_count{job="backend", uri="/api/v1/posts", status="500"}'
+        values: '0x1500'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: ApiAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: ApiAvailabilitySlowBurn
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: ApiAvailabilityBudgetBurn
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # 5. FeedReadLatencyFastBurn — every feed-read is slower than 200ms.
+  # bucket{le="0.2"} stays at 0; _count climbs → slow-ratio = 1.0.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'feed_read_duration_seconds_bucket{job="backend", le="0.2"}'
+        values: '0x90'
+      - series: 'feed_read_duration_seconds_count{job="backend"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: FeedReadLatencyFastBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: feed_read_latency
+            exp_annotations:
+              summary: "Feed-read latency burning 30d budget very fast (fast-burn)."
+
+  # ---------------------------------------------------------------------------
+  # 6. FeedReadLatencySlowBurn — every feed-read slow over 6h+.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'feed_read_duration_seconds_bucket{job="backend", le="0.2"}'
+        values: '0x440'
+      - series: 'feed_read_duration_seconds_count{job="backend"}'
+        values: '0+10x440'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: FeedReadLatencySlowBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: feed_read_latency
+            exp_annotations:
+              summary: "Feed-read latency burning 30d budget fast (slow-burn page)."
+
+  # ---------------------------------------------------------------------------
+  # 7. PostCreateLatencyFastBurn — every post-create slow (> 500ms).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'posts_create_duration_seconds_bucket{job="backend", le="0.5"}'
+        values: '0x90'
+      - series: 'posts_create_duration_seconds_count{job="backend"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: PostCreateLatencyFastBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: post_create_latency
+            exp_annotations:
+              summary: "Post-create latency burning 30d budget very fast (fast-burn)."
+
+  # ---------------------------------------------------------------------------
+  # 8. PostCreateLatencySlowBurn.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'posts_create_duration_seconds_bucket{job="backend", le="0.5"}'
+        values: '0x440'
+      - series: 'posts_create_duration_seconds_count{job="backend"}'
+        values: '0+10x440'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: PostCreateLatencySlowBurn
+        exp_alerts:
+          - exp_labels:
+              job: backend
+              severity: page
+              slo: post_create_latency
+            exp_annotations:
+              summary: "Post-create latency burning 30d budget fast (slow-burn page)."
+
+  # ---------------------------------------------------------------------------
+  # 9. BackendDown — scrape target is down for 3 minutes, fires after 2m for:.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="backend", instance="host.docker.internal:8080"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              instance: "host.docker.internal:8080"
+              job: backend
+            exp_annotations:
+              summary: "Backend scrape target is down."
+
+  # ---------------------------------------------------------------------------
+  # 10. BackendDown does NOT fire when scrape target is consistently up.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'up{job="backend", instance="host.docker.internal:8080"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BackendDown
+        exp_alerts: []

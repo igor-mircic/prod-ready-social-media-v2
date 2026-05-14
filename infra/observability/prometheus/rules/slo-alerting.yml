@@ -1,0 +1,123 @@
+# SLO alerting rules — multi-window multi-burn-rate firings.
+#
+# Pattern (Google SRE Workbook, ch.5):
+#   fast page : long=1h × short=5m   burn_rate=14.4   for: 2m
+#   slow page : long=6h × short=30m  burn_rate=6      for: 15m
+#   ticket    : long=3d × short=6h   burn_rate=1      for: 1h
+#
+# A burn rate of N means "consuming the 30d budget N× faster than allowed".
+# The alert threshold on the error/slow-ratio recording rule is therefore
+#   N * (1 - SLO_target)
+# e.g. for 99.5% availability: burn 14.4 × budget 0.005 = ratio > 0.072.
+#
+# Every alert carries two routing-contract labels:
+#   severity ∈ {page, ticket}
+#   slo      = api_availability | feed_read_latency | post_create_latency
+# (BackendDown is operational, not budget-based — it has severity but no slo.)
+#
+# Annotations are kept to a single `summary:` line per alert so the promtool
+# fixture stays compact; richer descriptions can be layered in alongside a
+# real webhook receiver in a follow-up slice.
+groups:
+  - name: slo_api_availability_burn
+    rules:
+      - alert: ApiAvailabilityFastBurn
+        expr: |
+          job:slo_api_availability:errors_ratio_rate1h > (14.4 * (1 - 0.995))
+          and
+          job:slo_api_availability:errors_ratio_rate5m > (14.4 * (1 - 0.995))
+        for: 2m
+        labels:
+          severity: page
+          slo: api_availability
+        annotations:
+          summary: "API availability burning 30d budget very fast (fast-burn)."
+
+      - alert: ApiAvailabilitySlowBurn
+        expr: |
+          job:slo_api_availability:errors_ratio_rate6h > (6 * (1 - 0.995))
+          and
+          job:slo_api_availability:errors_ratio_rate30m > (6 * (1 - 0.995))
+        for: 15m
+        labels:
+          severity: page
+          slo: api_availability
+        annotations:
+          summary: "API availability burning 30d budget fast (slow-burn page)."
+
+      - alert: ApiAvailabilityBudgetBurn
+        expr: |
+          job:slo_api_availability:errors_ratio_rate3d > (1 * (1 - 0.995))
+          and
+          job:slo_api_availability:errors_ratio_rate6h > (1 * (1 - 0.995))
+        for: 1h
+        labels:
+          severity: ticket
+          slo: api_availability
+        annotations:
+          summary: "API availability burning 30d budget steadily (ticket)."
+
+  - name: slo_feed_read_latency_burn
+    rules:
+      - alert: FeedReadLatencyFastBurn
+        expr: |
+          job:slo_feed_read_latency:slow_ratio_rate1h > (14.4 * (1 - 0.95))
+          and
+          job:slo_feed_read_latency:slow_ratio_rate5m > (14.4 * (1 - 0.95))
+        for: 2m
+        labels:
+          severity: page
+          slo: feed_read_latency
+        annotations:
+          summary: "Feed-read latency burning 30d budget very fast (fast-burn)."
+
+      - alert: FeedReadLatencySlowBurn
+        expr: |
+          job:slo_feed_read_latency:slow_ratio_rate6h > (6 * (1 - 0.95))
+          and
+          job:slo_feed_read_latency:slow_ratio_rate30m > (6 * (1 - 0.95))
+        for: 15m
+        labels:
+          severity: page
+          slo: feed_read_latency
+        annotations:
+          summary: "Feed-read latency burning 30d budget fast (slow-burn page)."
+
+  - name: slo_post_create_latency_burn
+    rules:
+      - alert: PostCreateLatencyFastBurn
+        expr: |
+          job:slo_post_create_latency:slow_ratio_rate1h > (14.4 * (1 - 0.95))
+          and
+          job:slo_post_create_latency:slow_ratio_rate5m > (14.4 * (1 - 0.95))
+        for: 2m
+        labels:
+          severity: page
+          slo: post_create_latency
+        annotations:
+          summary: "Post-create latency burning 30d budget very fast (fast-burn)."
+
+      - alert: PostCreateLatencySlowBurn
+        expr: |
+          job:slo_post_create_latency:slow_ratio_rate6h > (6 * (1 - 0.95))
+          and
+          job:slo_post_create_latency:slow_ratio_rate30m > (6 * (1 - 0.95))
+        for: 15m
+        labels:
+          severity: page
+          slo: post_create_latency
+        annotations:
+          summary: "Post-create latency burning 30d budget fast (slow-burn page)."
+
+  - name: backend_liveness
+    rules:
+      # Operational alert (no slo label) — catches the failure mode where the
+      # backend is offline and the burn-rate ratios above can't fire because
+      # there are no samples to divide.
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Backend scrape target is down."
