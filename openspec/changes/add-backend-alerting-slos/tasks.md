@@ -47,7 +47,7 @@
 ## 6. CI gate — promtool test rules
 
 - [x] 6.1 Add a `promtool-test-rules` step (or job) to the existing CI workflow that mounts `infra/observability/prometheus/rules/` and runs `promtool test rules slo-tests.yml` inside the pinned `prom/prometheus` image.
-- [ ] 6.2 Trigger the workflow on the branch and confirm the new step runs and passes.
+- [x] 6.2 Trigger the workflow on the branch and confirm the new step runs and passes.
 - [x] 6.3 Deliberately break one of the alert thresholds in a throwaway commit; confirm the step fails; revert.
 
 ## 7. README — the local alerting run loop
@@ -59,5 +59,5 @@
 
 ## 8. Spec validation + branch + commit
 
-- [ ] 8.1 Run `openspec validate --strict add-backend-alerting-slos` and resolve any findings.
-- [ ] 8.2 Create branch `add-backend-alerting-slos`, commit the proposal artifacts, and push (per the memory rule that proposals get branched and committed before `/clear`).
+- [x] 8.1 Run `openspec validate --strict add-backend-alerting-slos` and resolve any findings.
+- [x] 8.2 Create branch `add-backend-alerting-slos`, commit the proposal artifacts, and push (per the memory rule that proposals get branched and committed before `/clear`).
