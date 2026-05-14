@@ -33,6 +33,24 @@
 #     metric names verbatim (`web_vitals_lcp_bucket`, not
 #     `otelcol_web_vitals_lcp_milliseconds_bucket`) so dashboard
 #     PromQL stays readable.
+#
+# Slice 7 (add-frontend-errors) adds:
+#   - A second `logs` pipeline receiving FE OTLP log records on the
+#     same `:4318` listener (CORS allowlist already covers `/v1/logs`
+#     via the catch-all `allowed_origins`).
+#   - A `filter/frontend_only` processor that drops any log record
+#     whose `resource.service.name != "frontend"` — defence-in-depth
+#     so a future BE-via-OTLP migration doesn't accidentally route
+#     backend logs through the FE-shaped redaction pass.
+#   - An `attributes/pii_scrub` processor applying the same three
+#     regex patterns the SDK uses (JWT, email, bearer-token) over
+#     `error.message`, `error.stack_trace`, and `body`. The patterns
+#     are intentionally identical to
+#     `frontend/src/observability/error-sink.ts`'s `PII_REGEXES`;
+#     when one changes the other must change in the same commit.
+#   - Reuses the existing `loki` exporter from slice 4 — FE log
+#     records land in Loki under `event.dataset=frontend.error`
+#     alongside the BE `backend.access` stream.
 
 receivers:
   otlp:
@@ -127,6 +145,65 @@ processors:
         - 'IsMatch(attributes["route"], "[0-9a-f]{8,}")'
         - 'IsMatch(attributes["route"], "/[0-9]{4,}(/|$)")'
 
+  # Slice 7 FE-only gate. The OTLP/HTTP receiver carries logs from any
+  # source that POSTs to `/v1/logs`; today only the frontend SDK does,
+  # but the explicit drop here makes the boundary auditable. The
+  # `filter` processor expects an OTTL expression that, when TRUE,
+  # KEEPS the record — so the predicate is "service.name IS frontend",
+  # not "NOT backend". `resource.attributes["service.name"]` is the
+  # canonical OTel resource shape produced by the SDK's
+  # `frontendResource` (see frontend/src/observability/resource.ts).
+  filter/frontend_only:
+    logs:
+      log_record:
+        - 'resource.attributes["service.name"] != "frontend"'
+
+  # Slice 7 PII backstop — last-line redaction of any token, email,
+  # or bearer-shaped substring that survived the SDK-side scrub. The
+  # attributes processor's `update` action does not accept a regex
+  # `pattern`, so we use the `transform` processor with OTTL's
+  # `replace_pattern` over `attributes["error.message"]`,
+  # `attributes["error.stack_trace"]`, and the top-level `body` field.
+  #
+  # Patterns are kept identical to
+  # `frontend/src/observability/error-sink.ts`'s `PII_REGEXES`; if one
+  # diverges from the other the auditable defence-in-depth promise
+  # breaks. OTTL accepts Go-RE2 regex syntax (no lookahead/lookbehind);
+  # the SDK regex set is JS-flavoured but the three patterns happen to
+  # fit RE2 unchanged. `where ... != nil` guards prevent OTTL warnings
+  # when a record is missing one of the attribute keys.
+  transform/pii_scrub:
+    log_statements:
+      - context: log
+        statements:
+          - replace_pattern(attributes["error.message"], "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "[REDACTED]") where attributes["error.message"] != nil
+          - replace_pattern(attributes["error.message"], "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", "[REDACTED]") where attributes["error.message"] != nil
+          - replace_pattern(attributes["error.message"], "\\b[A-Za-z0-9+/=]{40,}\\b", "[REDACTED]") where attributes["error.message"] != nil
+          - replace_pattern(attributes["error.stack_trace"], "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "[REDACTED]") where attributes["error.stack_trace"] != nil
+          - replace_pattern(attributes["error.stack_trace"], "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", "[REDACTED]") where attributes["error.stack_trace"] != nil
+          - replace_pattern(attributes["error.stack_trace"], "\\b[A-Za-z0-9+/=]{40,}\\b", "[REDACTED]") where attributes["error.stack_trace"] != nil
+          - replace_pattern(body, "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+", "[REDACTED]")
+          - replace_pattern(body, "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b", "[REDACTED]")
+          - replace_pattern(body, "\\b[A-Za-z0-9+/=]{40,}\\b", "[REDACTED]")
+
+  # Slice 7 Loki label hints — the loki exporter promotes only the
+  # attributes/resource-attributes nominated in `loki.attribute.labels`
+  # / `loki.resource.labels`. Without these hints, FE log records reach
+  # Loki under a single empty label set and the LogQL query
+  # `{event_dataset="frontend.error"}` cannot match. The hint values
+  # use the OTel attribute names exactly; the exporter exposes them as
+  # Loki labels with dots replaced by underscores per Loki label-name
+  # rules (so `event.dataset` → `event_dataset`, `service.name` →
+  # `service_name` — matching the slice-4 BE label set).
+  attributes/loki_labels:
+    actions:
+      - key: loki.attribute.labels
+        action: insert
+        value: "event.dataset"
+      - key: loki.resource.labels
+        action: insert
+        value: "service.name"
+
 exporters:
   otlp/tempo:
     endpoint: tempo:4317
@@ -162,7 +239,22 @@ service:
       receivers: [otlp]
       processors: [batch, filter/drop_high_cardinality]
       exporters: [prometheus]
-    logs:
+    # BE log shipping (slice 4): filelog tails the bind-mounted ECS
+    # JSON files and exports to Loki.
+    logs/backend:
       receivers: [filelog]
       processors: [batch]
+      exporters: [loki]
+    # FE log shipping (slice 7): OTLP/HTTP receives browser-emitted
+    # error log records. The pipeline filters to `service.name=frontend`
+    # only, applies the PII regex backstop over attributes and body,
+    # then routes to the same Loki exporter (records land under
+    # `event.dataset=frontend.error`).
+    logs/frontend:
+      receivers: [otlp]
+      processors:
+        - batch
+        - filter/frontend_only
+        - transform/pii_scrub
+        - attributes/loki_labels
       exporters: [loki]
