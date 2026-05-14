@@ -42,6 +42,20 @@ The test SHALL `test.skip(...)` itself when the Tempo HTTP API is not reachable,
 #### Scenario: Telemetry-enabled dev server binds to the allowlisted dev origin
 
 - **WHEN** the e2e test's `beforeAll` spawns its own `vite dev` server (so the build can read `VITE_OTEL_ENABLED=true`)
-- **THEN** the server binds to `http://localhost:5173` exactly
+- **THEN** the server binds to `http://localhost:5173` exactly (host MUST be the literal `localhost`, not `127.0.0.1` — CORS treats those as distinct origins and only `http://localhost:5173` is in `cors.allowed_origins`)
 - **AND** the spawn passes `--strictPort` so a busy port fails the test loudly rather than silently using a fallback
 - **AND** the Origin the browser presents to the Collector's CORS preflight (`http://localhost:5173`) is already in `cors.allowed_origins` on the OTLP/HTTP receiver.
+
+#### Scenario: Loki HTTP API is reachable from the host
+
+- **GIVEN** the observability profile is running
+- **WHEN** the e2e test issues `GET http://localhost:3100/loki/api/v1/query_range` from the Playwright process running on the host
+- **THEN** Loki responds (`docker-compose.yml` SHALL publish container port 3100 to host port 3100 on the `loki` service)
+- **AND** the Grafana → Tempo `tracesToLogs` pivot continues to use the container DNS address (`http://loki:3100`), unaffected by the host port mapping.
+
+#### Scenario: Loki query matches the ECS-nested trace.id shape
+
+- **GIVEN** the e2e test has captured a `traceparent` from the browser's `POST /api/v1/posts`
+- **WHEN** the test polls `GET http://localhost:3100/loki/api/v1/query_range` with a LogQL filter that selects lines containing the trace id
+- **THEN** the filter SHALL match the backend's ECS-nested emission (`"trace":{"id":"<id>"`), not a flat dotted key (`"trace.id":"<id>"`)
+- **AND** the test SHALL accept the line as a match if the 32-hex trace id appears anywhere in the stored line (the id is unique enough to make false positives impossible and avoids coupling the assertion to the loki exporter's field-order choices).

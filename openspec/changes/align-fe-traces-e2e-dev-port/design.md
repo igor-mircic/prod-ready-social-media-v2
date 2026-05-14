@@ -169,6 +169,84 @@ two new Scenarios that make the test's invariants explicit, so
 a future reader who tries to "simplify" the port choice or the
 poll loop has a written-down reason not to.
 
+### Decision 4: Bind/navigate via `localhost`, not `127.0.0.1`
+
+Discovered during local verification: even with the port set to
+`5173`, the browser's preflight to the Collector is still rejected
+when the page is loaded as `http://127.0.0.1:5173`. CORS treats the
+hostname literally — `localhost` and `127.0.0.1` are distinct
+origins, and only `http://localhost:5173` is in the Collector
+allowlist.
+
+The fix is symmetric and one-line in two places: change the spawn's
+`--host 127.0.0.1` to `--host localhost`, and change `TELEMETRY_URL`
+from `http://127.0.0.1:5173` to `http://localhost:5173`. On macOS
+both names resolve to the same IPv4 loopback, so binding behaviour
+is unchanged.
+
+Alternatives considered:
+
+- **Add `http://127.0.0.1:5173` to the Collector allowlist.**
+  Rejected for the same reason we rejected adding `5174`: the
+  allowlist names "the canonical FE dev origins," not test-host
+  literals. Two names for the same loopback would also lock readers
+  into wondering which the FE actually uses at runtime.
+
+### Decision 5: Expose Loki on host port 3100 (one-line infra change)
+
+Discovered during local verification: the slice-5 spec queries
+`http://localhost:3100/loki/api/v1/query_range` from the Playwright
+process running on the host, but slice 4's `docker-compose.yml`
+brought Loki up without a `ports:` mapping. Loki is reachable from
+inside the Docker network (`http://loki:3100`, used by Grafana's
+`tracesToLogs` pivot and by the Collector's loki exporter) but not
+from the host. Every local run of the spec failed at the Loki
+assertion with `Received: undefined` regardless of correctness on
+the FE/Tempo side.
+
+Adding one `ports: ["3100:3100"]` entry on the `loki` service is
+the minimum-friction fix: it surfaces Loki the same way Tempo,
+Prometheus, Grafana, and the Collector are already surfaced for
+direct host-side debugging. CI is unaffected (the observability
+profile is not started in CI).
+
+This expands the proposal's original "no infra changes" promise.
+The expansion is justified because the proposal's stated goal is
+"the slice-5 e2e spec passes when run locally with observability
+up," and that goal cannot be reached without the port exposure.
+The original "no infra changes" framing was an artifact of an
+incomplete pre-implementation read of the spec; the implementation
+surfaced the gap.
+
+### Decision 6: Loki query — substring match on the trace id
+
+The slice-5 spec's Loki LogQL filter looks for the flat dotted key
+`"trace.id":"…"`, but the backend writes the ECS-nested form
+`"trace":{"id":"…"}` (verified in `infra/observability/logs/backend.json`
+during local verification). The filter never matched a single line,
+so the test's Loki assertion always returned `undefined` locally.
+
+Two options to fix:
+
+**(A)** Match the nested shape exactly: `"trace":\{"id":"<id>"`.
+**(B)** Match the bare 32-hex trace id as a substring.
+
+We pick **(B)**. The 32-hex trace id is unique enough that false
+positives are impossible in practice, and the substring approach is
+immune to two real fragilities of (A):
+
+- The loki exporter emits the `attributes` object with fields in
+  alphabetical order (`flags` before `id`), not source order — so
+  `"trace":\{"id":...` would still miss the attributes copy of the
+  trace id, leaving only the body's escaped JSON to match.
+- Backslash-escaping inside the body field (`\"trace\":{\"id\":\"…\"`)
+  forces the regex to negotiate two escape layers (LogQL raw string
+  → regex → escaped JSON), which is exactly the kind of thing
+  future-us will get wrong.
+
+The post-filter in JS (`line.includes(traceId)`) confirms the match
+without re-introducing a shape-coupled regex.
+
 ## Risks / Trade-offs
 
 [**Risk**: A future test or tool binds `:5173` while e2e runs.]
