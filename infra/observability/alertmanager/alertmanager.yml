@@ -1,0 +1,19 @@
+# Alertmanager configuration for the local-dev observability stack.
+#
+# Stub configuration: the top-level `route:` points at the built-in `null`
+# receiver — alerts received from Prometheus are accepted (and visible via
+# the v2 HTTP API + Grafana's Alerting nav) but not forwarded anywhere.
+# A real webhook receiver (PagerDuty / Slack / dev sink) is explicitly
+# deferred to a follow-up slice that also adds fault injection.
+#
+# Alertmanager UI:    http://localhost:9093
+# v2 HTTP API:        http://localhost:9093/api/v2/alerts
+route:
+  receiver: 'null'
+  group_by: ['alertname', 'slo']
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: 'null'

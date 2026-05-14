@@ -1,0 +1,29 @@
+apiVersion: 1
+
+# Alertmanager datasource — wires Grafana's built-in Alerting left-nav to the
+# slice-8 `social-alertmanager` container so active alerts surface in Grafana
+# without any dashboard changes.
+#
+# `isDefault: false` keeps Prometheus the default datasource for ad-hoc
+# queries. `editable: false` mirrors the other provisioned datasources so
+# Grafana cannot mutate the provisioned state.
+#
+# `implementation: prometheus` tells Grafana this datasource speaks the
+# Prometheus-flavour Alertmanager API (the upstream `prom/alertmanager`
+# container is the reference implementation; the alternative — `cortex` —
+# is the Mimir/Cortex multi-tenant flavour).
+#
+# The slice-8 README documents the Grafana Alerting nav as one of two
+# surfaces for active alerts (the Alertmanager UI at :9093 is the other).
+
+datasources:
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    isDefault: false
+    editable: false
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

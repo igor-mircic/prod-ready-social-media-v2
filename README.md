@@ -436,6 +436,67 @@ deploy — see `project_source_maps_pre_deploy.md` in the
 auto-memory and the **Open Follow-ups** section of
 `openspec/changes/add-frontend-errors/design.md`.
 
+### Alerting
+
+The same observability profile also brings up [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/)
+and loads the slice-8 SLO recording + multi-window multi-burn-rate alerting
+rules into Prometheus:
+
+```sh
+docker-compose --profile observability up -d
+```
+
+Three SLOs are evaluated continuously against the backend's existing metrics:
+
+- **API availability** — 5xx ratio on `/api/v1/*`, target `99.5%` over 30d.
+  Fast-page (1h × 5m), slow-page (6h × 30m), and ticket (3d × 6h) burn-rate
+  alerts fire from the same error budget.
+- **Feed read latency** — fraction of `feed.read.duration` requests slower
+  than 200ms, target `95%` over 30d. Fast-page and slow-page alerts.
+- **Post create latency** — fraction of `posts.create.duration` requests
+  slower than 500ms, target `95%` over 30d. Fast-page and slow-page alerts.
+
+Plus a non-SLO operational alert: `BackendDown` fires when Prometheus has
+been unable to scrape `up{job="backend"}` for 2 minutes — necessary because
+burn-rate alerts can't fire when the target is offline (no samples to divide).
+
+**Where active alerts surface:**
+
+- Alertmanager UI: `http://localhost:9093` (full alert list, silences, status).
+- Grafana → Alerting (left-nav) — reads the same alerts via the provisioned
+  Alertmanager datasource. No copy-paste from Prometheus needed.
+- Raw HTTP: `curl http://localhost:9093/api/v2/alerts` for scripting.
+
+For this slice, Alertmanager is configured with a stub `null` receiver — alerts
+are accepted and visible on the surfaces above, but not forwarded anywhere.
+A real webhook receiver (PagerDuty / Slack / dev sink) is deferred to the
+follow-up slice that also adds fault injection.
+
+**Run the alerting-rule unit tests locally** with `promtool test rules`:
+
+```sh
+docker run --rm --entrypoint promtool \
+  -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+  prom/prometheus:v2.55.1 \
+  test rules /rules/slo-tests.yml
+```
+
+The fixture at `infra/observability/prometheus/rules/slo-tests.yml` is the
+executable spec for the alerting rules — each scenario in
+`openspec/changes/add-backend-alerting-slos/specs/observability/spec.md`
+corresponds to a test stanza. The same one-liner runs in CI as a gate.
+
+**Editing rule files** (`slo-recording.yml`, `slo-alerting.yml`) requires a
+Prometheus restart for the changes to take effect; Prometheus reads the rule
+files only at startup under this compose setup:
+
+```sh
+docker-compose --profile observability restart prometheus
+```
+
+(The Grafana datasource provisioning has the same restart requirement — see
+the prior subsection's notes on the slice-4 / slice-5 datasource files.)
+
 ## Prerequisites
 
 - Java 21
