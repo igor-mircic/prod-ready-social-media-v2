@@ -31,6 +31,19 @@ fix is to tell the agent not to export at all in CI.
   loaded — only the network exporters are disabled. In-process
   trace-context propagation and the `trace.id` / `span.id` MDC keys
   the slice-3 spec relies on continue to work.
+- **Backend — `build.gradle.kts` honours parent-env OTEL_* overrides
+  on `bootRun` and `test`.** The slice-3 obs spec already says the
+  defaults are "overridable at runtime", but the current build calls
+  `JavaForkOptions.environment(k, v)` unconditionally — which silently
+  overrides whatever the parent shell set. Gate the
+  `otelEnvDefaults.forEach { … environment(k, v) }` block with a
+  `System.getenv(k) == null` check so the defaults only apply when
+  the parent env has not already named the key. This aligns the build
+  with the spec's existing wording and is what makes the CI workflow
+  env vars above actually take effect on the Gradle-forked test and
+  springdoc JVMs. No change to local dev: developers do not export
+  `OTEL_TRACES_EXPORTER` in their shell, so the build's defaults still
+  apply there.
 
 ### Explicit non-goals (deferred to follow-ups)
 
@@ -57,12 +70,15 @@ fix is to tell the agent not to export at all in CI.
   capturing that the workflow disables OTLP network exporters so
   the agent does not log connection errors against a non-existent
   collector. No existing requirements are removed or renamed.
+- `observability` — modifies one requirement ("Agent ships spans
+  only; metrics and logs OTLP exporters are explicitly disabled")
+  to add a scenario asserting that the documented `bootRun` / `test`
+  OTEL_* defaults are only applied when the parent env does not
+  already name the key — making the spec's existing "overridable
+  at runtime" wording verifiable.
 
 ### Touched-but-not-modified Capabilities (cited for clarity)
 
-- `observability` — no changes. The slice-3 trace-id / span-id
-  propagation contract is unaffected because the agent stays
-  loaded; only its network exporters are off.
 - `backend-scaffold`, `e2e` — no changes. The env vars never
   reach the application code; nothing in the JAR or test harness
   has to know about this.
@@ -71,13 +87,23 @@ fix is to tell the agent not to export at all in CI.
 
 - **CI:** Modified — `.github/workflows/ci.yml` gains a workflow-level
   `env:` block setting three `OTEL_*_EXPORTER=none` variables.
-- **Backend, frontend, e2e source code:** No changes.
+- **Backend build:** Modified — `backend/build.gradle.kts`'s
+  `otelEnvDefaults` loop now skips keys already set in the parent
+  env, so the CI workflow's overrides actually reach the forked
+  test / springdoc JVMs.
+- **Backend, frontend, e2e source code:** No changes (the build
+  script is build config, not application source).
 - **Dependencies (npm / Gradle):** No changes.
 - **Database:** No migrations. No schema changes.
-- **Local dev loop:** No changes. The dev compose `observability`
-  profile keeps providing the collector at `localhost:4318`; the
-  agent's default endpoint resolves locally as before.
+- **Local dev loop:** No changes. Developers do not export
+  `OTEL_*` vars in their shell; the build script's defaults still
+  apply, and the dev compose `observability` profile keeps providing
+  the collector at `localhost:4318`.
 - **OpenSpec specs:**
-  - Modified at archive time: `openspec/specs/ci/spec.md` — gains
-    one new requirement about disabling OTLP network exporters in
-    the CI workflow.
+  - Modified at archive time:
+    - `openspec/specs/ci/spec.md` — gains one new requirement about
+      disabling OTLP network exporters in the CI workflow.
+    - `openspec/specs/observability/spec.md` — gains one new scenario
+      under the existing "Agent ships spans only; metrics and logs
+      OTLP exporters are explicitly disabled" requirement, asserting
+      that parent-env values override the build's defaults.

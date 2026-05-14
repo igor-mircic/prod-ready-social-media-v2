@@ -9,6 +9,11 @@
 - [x] 2.1 Confirm the workflow does NOT set `OTEL_SDK_DISABLED=true` anywhere (workflow env, job env, step env).
 - [x] 2.2 Confirm no backend or e2e step passes `-Dotel.javaagent.enabled=false` on a JVM command line. The agent stays loaded; only its exporters are disabled.
 
+## 2b. Backend build — honour parent-env OTEL_* overrides
+
+- [x] 2b.1 In `backend/build.gradle.kts`, gate the `otelEnvDefaults.forEach { (k, v) -> environment(k, v) }` block in both the `bootRun` and `test` task configurations on `System.getenv(k) == null`, so the defaults only apply when the parent env has not already named the key. Keep the existing comment about the defaults being "overridable by a real env var when running outside Gradle" — and refresh it to note that overridability now holds inside Gradle too.
+- [ ] 2b.2 Confirm `./gradlew test` from `backend/` still passes locally — proves the test JVM still gets the defaults when the parent shell has no `OTEL_*` exports.
+
 ## 3. CI — smoke against the empirical log
 
 - [ ] 3.1 Push the change to a feature branch and open its pull request.

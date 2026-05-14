@@ -91,8 +91,12 @@ val otelAgentJarPath: Provider<String> =
 	layout.buildDirectory.file("otel/opentelemetry-javaagent.jar").map { it.asFile.absolutePath }
 
 // OTEL_* defaults shared by `bootRun` and `test`. The agent reads these at
-// JVM start. Each is overridable by a real env var when running outside
-// Gradle (e.g. the e2e harness sets its own).
+// JVM start. Each is overridable by a real env var: when the parent shell
+// already exports a key (e.g. the GitHub Actions workflow sets
+// `OTEL_TRACES_EXPORTER=none` to silence the CI exporter retries, or the
+// e2e harness sets its own), the build skips the corresponding
+// `environment(…)` call so Gradle does not silently re-apply the default
+// on the forked JVM.
 //
 // OTEL_INSTRUMENTATION_LOGBACK_MDC_ENABLED is intentionally NOT set here — it
 // defaults to `true` in the agent, which puts `trace_id` / `span_id` /
@@ -112,7 +116,9 @@ val otelEnvDefaults = mapOf(
 tasks.named<BootRun>("bootRun") {
 	dependsOn(copyOtelAgent)
 	jvmArgs("-javaagent:${otelAgentJarPath.get()}")
-	otelEnvDefaults.forEach { (k, v) -> environment(k, v) }
+	otelEnvDefaults.forEach { (k, v) ->
+		if (System.getenv(k) == null) environment(k, v)
+	}
 }
 
 tasks.named<BootJar>("bootJar") {
@@ -130,7 +136,9 @@ tasks.withType<Test> {
 	// continues. Span assertions in TracingIT use an in-process
 	// `OpenTelemetryExtension` that hijacks `GlobalOpenTelemetry` rather than
 	// inspecting OTLP traffic.
-	otelEnvDefaults.forEach { (k, v) -> environment(k, v) }
+	otelEnvDefaults.forEach { (k, v) ->
+		if (System.getenv(k) == null) environment(k, v)
+	}
 }
 
 spotless {

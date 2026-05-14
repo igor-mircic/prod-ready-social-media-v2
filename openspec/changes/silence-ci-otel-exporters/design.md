@@ -129,7 +129,58 @@ properties before Spring boots, so a Spring profile does not
 help; the exporter would already be wired by the time
 `application-ci.yml` is loaded. Rejected on correctness grounds.
 
-### Decision 3: Keep the dev compose collector
+### Decision 3 (added during implementation): Fix `build.gradle.kts` to honour parent-env OTEL_* values
+
+**Chosen:** Gate the `otelEnvDefaults.forEach { (k, v) -> environment(k, v) }`
+block in `backend/build.gradle.kts` on `System.getenv(k) == null`,
+so the build's defaults only apply when the parent env has not
+already named the key.
+
+Empirical observation during implementation: the workflow-level
+env block from Decision 2 reaches the `Run backend tests`,
+`Generate OpenAPI spec`, and `Run Playwright` steps' direct
+process environments. It does NOT reach the JVMs Gradle forks
+for `bootRun` and `test`, because Gradle's
+`JavaForkOptions.environment(k, v)` unconditionally overrides
+the parent env. The result was 3 OTel-error lines in
+`Generate OpenAPI spec` and 120 across the three e2e legs on the
+first attempt, despite the workflow env being correct.
+
+The slice-3 observability spec at
+`openspec/specs/observability/spec.md:530` already says the
+defaults are "overridable at runtime". The build's current
+unconditional `.environment(k, v)` calls violate that wording.
+Adding the `System.getenv(k) == null` guard fixes the bug and
+makes the spec's overridability contract verifiable.
+
+**Alternative A: `JAVA_TOOL_OPTIONS=-Dotel.traces.exporter=none`
+at the workflow level.** OTel SDK reads JVM system properties as
+well as env vars, and system properties win over env vars in the
+SDK's config resolution. JAVA_TOOL_OPTIONS is auto-honoured by
+every JVM the runner starts, including Gradle's forks. Stays
+within the original "CI-only" scope. Costs: a `Picked up
+JAVA_TOOL_OPTIONS: …` line on every JVM startup (small new
+noise, ironic given the goal); uses a different config mechanism
+(system properties) than the existing build script (env vars),
+which is harder to read. Rejected — Option A (fix the build) is
+a smaller diff with no new noise.
+
+**Alternative B: leave the build alone, accept that the
+workflow env vars only silence the e2e bootJar (which is not
+Gradle-forked) and live with the backend job's OTel noise.**
+Half-measure; would leave the `Generate OpenAPI spec` step
+still spewing errors. Rejected.
+
+**Why the existing "overridable at runtime" wording is correct
+and the build needs fixing, not the spec:** the spec authors
+clearly intended overridability — the wording, the scenario
+name ("Build wires the documented OTEL_* **defaults**"), and
+the inline build comment at line 94-95 ("Each is **overridable
+by a real env var** when running outside Gradle") all say
+defaults. The current unconditional `.environment(k, v)` is
+the inconsistent piece.
+
+### Decision 4: Keep the dev compose collector
 
 **Chosen:** No change to `docker-compose.yml`'s `observability`
 profile. The dev loop's collector listens on `localhost:4318`
