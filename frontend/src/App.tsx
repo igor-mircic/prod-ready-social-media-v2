@@ -15,6 +15,7 @@ import { HomePage } from './features/home/HomePage'
 import { ProfilePage } from './features/profile/ProfilePage'
 import { SignupForm } from './features/signup/SignupForm'
 import { NotFoundPage } from './features/notfound/NotFoundPage'
+import RouteTimingObserver from './observability/route-timing'
 
 function AuthBridge({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
@@ -33,6 +34,7 @@ function RootRedirect() {
 function App() {
   return (
     <BrowserRouter>
+      <RouteTimingObserver />
       <AuthBridge>
         <Routes>
           <Route

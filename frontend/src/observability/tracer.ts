@@ -4,15 +4,12 @@ import { registerInstrumentations } from '@opentelemetry/instrumentation'
 import { DocumentLoadInstrumentation } from '@opentelemetry/instrumentation-document-load'
 import { FetchInstrumentation } from '@opentelemetry/instrumentation-fetch'
 import { UserInteractionInstrumentation } from '@opentelemetry/instrumentation-user-interaction'
-import { resourceFromAttributes } from '@opentelemetry/resources'
 import {
   BatchSpanProcessor,
   WebTracerProvider,
 } from '@opentelemetry/sdk-trace-web'
-import {
-  ATTR_SERVICE_NAME,
-  ATTR_SERVICE_VERSION,
-} from '@opentelemetry/semantic-conventions'
+
+import { frontendResource } from './resource'
 
 const DEFAULT_ENDPOINT = 'http://localhost:4318/v1/traces'
 const DEFAULT_BATCH_DELAY_MS = 500
@@ -22,7 +19,6 @@ type ViteEnv = {
   VITE_OTEL_ENABLED?: string
   VITE_OTEL_TRACES_ENDPOINT?: string
   VITE_OTEL_BATCH_DELAY_MS?: string
-  VITE_APP_VERSION?: string
   VITE_API_BASE_URL?: string
 }
 
@@ -61,15 +57,9 @@ export function bootstrapTelemetry(): void {
 
   const endpoint = env.VITE_OTEL_TRACES_ENDPOINT ?? DEFAULT_ENDPOINT
   const scheduledDelayMillis = resolveBatchDelayMs(env.VITE_OTEL_BATCH_DELAY_MS)
-  const version = env.VITE_APP_VERSION ?? 'unknown'
-
-  const resource = resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: 'frontend',
-    [ATTR_SERVICE_VERSION]: version,
-  })
 
   const provider = new WebTracerProvider({
-    resource,
+    resource: frontendResource,
     spanProcessors: [
       new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }), {
         scheduledDelayMillis,

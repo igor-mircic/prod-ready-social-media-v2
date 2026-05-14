@@ -1,8 +1,9 @@
 # OpenTelemetry Collector config for local-dev observability.
 #
-# Two pipelines:
-# - traces: OTLP receiver  -> batch -> redact-path-ids -> Tempo (otlp/tempo exporter).
-# - logs:   filelog receiver -> batch -> Loki (loki exporter).
+# Three pipelines:
+# - traces:  OTLP receiver  -> batch -> redact-path-ids -> Tempo (otlp/tempo exporter).
+# - metrics: OTLP receiver  -> batch -> drop_high_cardinality -> Prometheus exporter.
+# - logs:    filelog receiver -> batch -> Loki (loki exporter).
 #
 # The OTel Java agent ships traces to host port 4318 (unchanged from
 # slice 3 — only the container behind the port changes: the Collector
@@ -18,6 +19,20 @@
 #   - A `transform/redact-path-ids` processor that replaces high-
 #     cardinality path segments (UUIDs, opaque hex, numeric ids) on
 #     both FE and BE spans before they reach Tempo.
+#
+# Slice 6 (add-frontend-rum-metrics) adds:
+#   - A `metrics` pipeline that receives FE OTLP metrics on the same
+#     `:4318` listener (CORS allowlist already covers `/v1/metrics`).
+#   - A `filter/drop_high_cardinality` processor that drops any data
+#     point whose `route` attribute contains an unredacted id —
+#     defence-in-depth alongside the source-side route-template
+#     labelling in `frontend/src/observability/route-timing.tsx`.
+#   - A `prometheus` exporter on `0.0.0.0:8889` for Prometheus to
+#     scrape (see `infra/observability/prometheus/prometheus.yml`).
+#     `add_metric_suffixes: false` and `namespace: ""` keep the FE
+#     metric names verbatim (`web_vitals_lcp_bucket`, not
+#     `otelcol_web_vitals_lcp_milliseconds_bucket`) so dashboard
+#     PromQL stays readable.
 
 receivers:
   otlp:
@@ -97,6 +112,21 @@ processors:
           - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
           - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
 
+  # Slice 6 metric guard: drop any FE-emitted data point whose `route`
+  # attribute looks like an unredacted id (UUID v4, opaque hex >= 8
+  # chars, or a numeric path segment of 4+ digits with the typical
+  # `/digits/` shape). The frontend's `route-timing.tsx` already
+  # labels by route template — this filter is the second line of
+  # defence so a future code path that forgets to template-ify
+  # cannot blow up Prometheus cardinality. OTTL `where` lets a clean
+  # `route="/users/:userId"` pass through unchanged.
+  filter/drop_high_cardinality:
+    metrics:
+      datapoint:
+        - 'IsMatch(attributes["route"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")'
+        - 'IsMatch(attributes["route"], "[0-9a-f]{8,}")'
+        - 'IsMatch(attributes["route"], "/[0-9]{4,}(/|$)")'
+
 exporters:
   otlp/tempo:
     endpoint: tempo:4317
@@ -111,12 +141,27 @@ exporters:
       exporter: false
       job: false
 
+  # Slice 6: expose FE-emitted metrics as Prometheus text-exposition
+  # format on `:8889/metrics`. `namespace: ""` and
+  # `add_metric_suffixes: false` keep the OTLP names verbatim so the
+  # Frontend overview dashboard's PromQL queries match what the
+  # browser SDK emits (`web_vitals_lcp_bucket`, not
+  # `otelcol_web_vitals_lcp_milliseconds_bucket`).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: ""
+    add_metric_suffixes: false
+
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [batch, transform/redact-path-ids]
       exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch, filter/drop_high_cardinality]
+      exporters: [prometheus]
     logs:
       receivers: [filelog]
       processors: [batch]

@@ -78,6 +78,11 @@ services:
     ports:
       - "4317:4317"
       - "4318:4318"
+      # Slice 6: prometheus exporter (FE RUM metrics scrape target).
+      # Prometheus inside the docker network reaches this via
+      # `collector:8889`; publishing the host port lets a developer
+      # `curl http://localhost:8889/metrics` directly for debugging.
+      - "8889:8889"
     volumes:
       - ./infra/observability/collector/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
       - ./infra/observability/logs:/var/log/backend:ro
