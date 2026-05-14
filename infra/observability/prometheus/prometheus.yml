@@ -21,3 +21,16 @@ scrape_configs:
     static_configs:
       - targets:
           - host.docker.internal:8080
+
+  # Slice 6: scrape the OTel Collector's `prometheus` exporter, which
+  # re-exposes browser-emitted FE OTLP metrics (Web Vitals, route
+  # transition timing, long tasks) as Prometheus text-exposition.
+  # The Collector container DNS name is `collector` on the shared
+  # docker network; port `8889` is bound by the `prometheus` exporter
+  # block in `infra/observability/collector/collector-config.yaml`.
+  - job_name: collector
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - collector:8889

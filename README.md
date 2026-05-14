@@ -280,6 +280,75 @@ Frontend RUM metrics (Web Vitals: LCP, INP, CLS) and frontend errors
 are the natural follow-up slices — they will layer on top of the
 trace propagation this slice establishes.
 
+### Frontend RUM metrics
+
+The frontend ships an opt-in OpenTelemetry browser metrics SDK that
+boots alongside the slice-5 tracer. With metrics enabled, the
+[`web-vitals`](https://github.com/GoogleChrome/web-vitals) library
+reports finalised LCP / CLS / INP / FCP / TTFB into OTel histograms
+named `web_vitals_*`; a React Router `<RouteTimingObserver />`
+records SPA route-transition durations into
+`route_change_duration_ms` (labelled by route template, never by
+resolved id); a `PerformanceObserver({type: 'longtask'})` records
+main-thread blocks into `long_task_duration_ms`.
+
+Opt in by exporting `VITE_OTEL_ENABLED=true` before starting the dev
+server (the same gate that enables slice-5 traces — flipping it on
+opts into both):
+
+```sh
+cd frontend && VITE_OTEL_ENABLED=true pnpm dev
+```
+
+On boot, the devtools console writes one confirmation line per
+telemetry surface:
+
+```
+OTel telemetry enabled: traces → http://localhost:4318/v1/traces
+OTel telemetry enabled: metrics → http://localhost:4318/v1/metrics
+```
+
+Wire path:
+
+1. The browser SDK POSTs OTLP/HTTP metrics to
+   `http://localhost:4318/v1/metrics` (the OTel Collector's HTTP
+   receiver, the same listener slice 5 uses for traces — its CORS
+   allowlist already covers the metrics endpoint).
+2. The Collector's slice-6 `metrics` pipeline runs FE data points
+   through a `filter/drop_high_cardinality` processor (defence-in-
+   depth against any future code path that forgets the route-template
+   label) and re-emits them as Prometheus text-exposition on
+   `http://localhost:8889/metrics`.
+3. Prometheus's `collector` scrape job (added in
+   `infra/observability/prometheus/prometheus.yml`) reads
+   `:8889/metrics` every 15 s into the same Prometheus instance the
+   Backend overview already uses.
+4. Grafana provisions the new dashboard at
+   `http://localhost:3000/d/frontend-overview` (also reachable via
+   Grafana search for `Frontend overview`). Four rows: Web Vitals
+   (LCP / CLS / INP / FCP / TTFB p75), route-timing percentiles
+   keyed by route, long-task rate and mean duration, and a
+   browser-request-volume proxy.
+
+Override the metrics endpoint with `VITE_OTEL_METRICS_ENDPOINT` if
+the Collector is fronted by a different host; tighten the export
+cadence with `VITE_OTEL_METRICS_EXPORT_INTERVAL_MS` (default 15 s,
+matched to Prometheus's `scrape_interval`).
+
+Empty panels are expected on a fresh stack: until a browser session
+loads the app with the gate enabled there are no FE samples to
+display, and even with the gate on individual Web Vitals only
+finalise after specific user actions — LCP after the first paint,
+INP after the first event handler completes, CLS at page hide.
+Open the app in a tab, click around for a few seconds, and the
+Frontend overview dashboard's panels start filling in within one
+export + scrape cycle (≤ 30 s).
+
+Frontend errors (React error boundary events, `window.onerror`,
+`unhandledrejection`) and FE-plus-BE alerting / SLO definitions
+are the natural follow-up slices — they layer on top of both this
+metrics path and the slice-5 trace path.
+
 ## Prerequisites
 
 - Java 21
