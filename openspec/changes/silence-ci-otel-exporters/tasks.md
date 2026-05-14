@@ -21,17 +21,17 @@
 
 ## 3. CI — smoke against the empirical log
 
-- [ ] 3.1 Push the change to a feature branch and open its pull request.
-- [ ] 3.2 Confirm the `backend (test + openapi drift)` job's `Run backend tests` log does NOT contain `Failed to export spans` or `ConnectException: Failed to connect to localhost/.*4318`.
-- [ ] 3.3 Confirm the same job's `Generate OpenAPI spec` log is similarly clean of OTLP exporter errors.
-- [ ] 3.4 Confirm each `e2e (${{ matrix.browser }})` matrix leg's `Run Playwright` log is clean of OTLP exporter errors (the backend bootJar's process logs are interleaved into that step's output).
-- [ ] 3.5 Confirm at least one backend application log line in the CI log carries non-empty `trace.id` and `span.id` fields, proving the OTel agent still loads and propagates context (the suppression only disables network exporters).
+- [x] 3.1 Push the change to a feature branch and open its pull request.
+- [x] 3.2 Confirm the `backend (test + openapi drift)` job's `Run backend tests` log does NOT contain `Failed to export spans` or `ConnectException: Failed to connect to localhost/.*4318`.
+- [x] 3.3 Confirm the same job's `Generate OpenAPI spec` log is similarly clean of OTLP exporter errors.
+- [x] 3.4 Confirm each `e2e (${{ matrix.browser }})` matrix leg's `Run Playwright` log is clean of OTLP exporter errors (the backend bootJar's process logs are interleaved into that step's output).
+- [x] 3.5 Confirm at least one backend application log line in the CI log carries non-empty `trace.id` and `span.id` fields, proving the OTel agent still loads and propagates context (the suppression only disables network exporters).
 
 ## 4. Documentation
 
-- [ ] 4.1 No README change is required (the dev loop is unchanged). Confirm no developer-facing doc claims that the CI run produces OTLP traces — if any such claim exists, update it inline to reflect the new CI behaviour.
+- [x] 4.1 No README change is required (the dev loop is unchanged). Confirm no developer-facing doc claims that the CI run produces OTLP traces — if any such claim exists, update it inline to reflect the new CI behaviour.
 
 ## 5. OpenSpec hygiene
 
-- [ ] 5.1 Run `openspec validate silence-ci-otel-exporters --strict` and resolve any failures.
-- [ ] 5.2 Confirm `git status` shows only `.github/workflows/ci.yml` modified (plus the proposal/design/specs/tasks under `openspec/changes/silence-ci-otel-exporters/`) — no incidental edits.
+- [x] 5.1 Run `openspec validate silence-ci-otel-exporters --strict` and resolve any failures.
+- [x] 5.2 Confirm `git status` shows only `.github/workflows/ci.yml`, `backend/build.gradle.kts`, `e2e/src/setup/backend.ts` modified (plus the proposal/design/specs/tasks under `openspec/changes/silence-ci-otel-exporters/`) — no incidental edits.
