@@ -26,5 +26,5 @@
 - [x] 4.1 Confirm no production wiring change: no new `@EnableAsync`, no new `Executor` / `TaskExecutor` bean, no change to any existing `@Configuration` class.
 - [x] 4.2 Build and run the backend test suite locally (`./gradlew :backend:test` or the project's standard invocation) and confirm the new test passes and no existing tests regress.
 - [x] 4.3 Run `openspec validate add-mdc-task-decorator --strict` and resolve any findings.
-- [ ] 4.4 Commit on a branch named after the change ID (`add-mdc-task-decorator`); push and open PR per project workflow.
-- [ ] 4.5 After archive, update memory note `project_async_mdc_gap.md` to reflect that the gap is now closed for executors that wire this decorator (the latent gap is no longer latent — it is gated by per-executor wiring discipline).
+- [x] 4.4 Commit on a branch named after the change ID (`add-mdc-task-decorator`); push and open PR per project workflow.
+- [x] 4.5 After archive, update memory note `project_async_mdc_gap.md` to reflect that the gap is now closed for executors that wire this decorator (the latent gap is no longer latent — it is gated by per-executor wiring discipline).
