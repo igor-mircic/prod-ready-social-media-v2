@@ -49,4 +49,4 @@
 
 - [x] 8.1 Run `openspec validate close-alerting-loop --strict` and resolve any findings.
 - [x] 8.2 Bring the full observability profile up locally, run the new e2e spec end-to-end, confirm `promtool test rules` still passes.
-- [ ] 8.3 Commit on a branch named `close-alerting-loop`, open the PR with the proposal/design/specs/tasks summary, and follow the autonomous-apply workflow through CI to archive.
+- [x] 8.3 Commit on a branch named `close-alerting-loop`, open the PR with the proposal/design/specs/tasks summary, and follow the autonomous-apply workflow through CI to archive.
