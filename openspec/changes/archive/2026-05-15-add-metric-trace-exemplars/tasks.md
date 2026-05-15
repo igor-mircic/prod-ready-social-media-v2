@@ -45,6 +45,6 @@
 
 ## 7. CI and merge
 
-- [ ] 7.1 Commit the change on a branch named `add-metric-trace-exemplars`, push, open a PR. Watch CI through to green (including the new e2e spec).
-- [ ] 7.2 Archive the OpenSpec change via `openspec archive add-metric-trace-exemplars` once the PR is approved; re-watch CI on the resulting commit.
+- [x] 7.1 Commit the change on a branch named `add-metric-trace-exemplars`, push, open a PR. Watch CI through to green (including the new e2e spec). PR #38; all 6 checks green (backend, frontend, prometheus-rules, e2e × 3 browsers).
+- [x] 7.2 Archive the OpenSpec change via `openspec archive add-metric-trace-exemplars` once the PR is approved; re-watch CI on the resulting commit. Archived as `2026-05-15-add-metric-trace-exemplars`.
 - [ ] 7.3 Ask the user before merging the PR.
