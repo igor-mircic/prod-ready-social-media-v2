@@ -1,0 +1,27 @@
+# Postgres workload — Bitnami `postgresql` Helm chart wrapped by
+# Kustomize via the `helmCharts:` directive. Rendered with
+# `kustomize build --enable-helm` (the `just k8s-apply` recipe wraps
+# the flag so the call site does not have to remember it).
+#
+# Companion plain-YAML resources (service-lb.yaml, secret.yaml) ride
+# along under `resources:` so a single render produces the full
+# slice surface in one stream (chart resources + LoadBalancer Service
+# + plain Secret).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+- name: postgresql
+  repo: https://charts.bitnami.com/bitnami
+  # Chart version pin. The 15.5.x line ships postgres 16 by default —
+  # matching the slice-0 docker-compose `postgres:16-alpine` pin.
+  # Re-pin against the active Bitnami release at PR time; bumping is
+  # a deliberate edit to this file.
+  version: 15.5.38
+  releaseName: postgres
+  namespace: social
+  valuesFile: values.yaml
+
+resources:
+- ./service-lb.yaml
+- ./secret.yaml

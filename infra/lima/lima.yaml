@@ -1,0 +1,122 @@
+# Lima VM definition for the project's local single-node k3s cluster.
+#
+# Shape matches the future Hetzner CAX21 deploy target 1:1 (4 vCPU,
+# 8 GiB RAM, arm64, Ubuntu 24.04 LTS, ~64 GiB disk — slightly smaller
+# than the CAX21's 80 GiB to leave headroom on the laptop). Running
+# the local and remote clusters at the same shape means stress tests
+# transfer: if a workload OOMs in Lima, it will OOM on Hetzner.
+#
+# Provisioning: the `provision:` block invokes the shared
+# `infra/provisioning/install-k3s.sh` script — the same script that
+# will eventually run as cloud-init userdata on Hetzner. No k3s
+# install logic lives in this file. A second provision step rewrites
+# the k3s-emitted kubeconfig for host consumption; that rewrite is
+# Lima-specific (it points at the host-mapped apiserver port and
+# names the context `lima-social`) and so lives here, NOT in the
+# shared install script.
+#
+# Host-facing context name: `lima-social`. The rewritten kubeconfig
+# lands at `$LIMA_HOME/lima-social/copied-from-guest/kubeconfig.yaml`
+# and can be merged into `~/.kube/config` (see README.md
+# "Local k3s cluster" section). The chosen context name does NOT
+# collide with the conventional Docker Desktop context names
+# (`docker-desktop`, `kubernetes-admin@kubernetes`).
+#
+# Host port mappings:
+#   localhost:5432  → in-cluster postgres (klipper-lb Service)
+#   localhost:16443 → kube-apiserver (16443 chosen to avoid
+#                     colliding with Docker Desktop's :6443)
+#
+# Bring up with `just vm-up` (which wraps
+# `limactl start --name=lima-social infra/lima/lima.yaml`).
+
+arch: aarch64
+cpus: 4
+memory: "8GiB"
+disk: "64GiB"
+
+# Pinned Ubuntu 24.04 LTS (Noble) cloud image. Explicit release
+# date — NOT `release: latest` — so a fresh `limactl start` boots a
+# known kernel + userland combination. Bump deliberately. The
+# canonical URL uses the codename (`noble/`) rather than the version
+# number (`24.04/`).
+images:
+- location: "https://cloud-images.ubuntu.com/releases/noble/release-20260321/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+
+# Lima mounts the macOS user's home directory at the same absolute
+# path inside the VM (so /Users/<you> on the host == /Users/<you> in
+# the guest). The provision script below relies on that to locate
+# infra/provisioning/install-k3s.sh in the cloned repo.
+mounts:
+- location: "~"
+  writable: false
+
+# Host port forwards. Add new entries here as future workloads (the
+# backend, the frontend dev tooling, ingress) land in k3s; the syntax
+# is already in place.
+portForwards:
+# Postgres LoadBalancer Service (postgres-lb in the social namespace,
+# klipper-lb assigns it the VM's primary IP). This is the load-
+# bearing forward for slice 1 — it lets every existing host client
+# (backend on bootRun, IDE connections, psql, the in-compose
+# postgres-exporter via host.docker.internal:5432) reach the in-
+# cluster postgres unchanged.
+- guestPort: 5432
+  hostPort: 5432
+# k3s kube-apiserver. Published on 16443 host-side so the slice does
+# not collide with Docker Desktop's default `kubernetes-admin@
+# kubernetes` context (which serves on :6443 on macOS).
+- guestPort: 6443
+  hostPort: 16443
+
+provision:
+# Step 1 — invoke the shared k3s install script on first boot. The
+# script lives at infra/provisioning/install-k3s.sh and is host-
+# agnostic (it MUST NOT depend on Lima); the same script will run as
+# Hetzner cloud-init userdata in a future slice. No k3s install logic
+# is duplicated inline here.
+- mode: system
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SCRIPT=$(find / -path '*/infra/provisioning/install-k3s.sh' -print -quit 2>/dev/null || true)
+    if [ -z "$SCRIPT" ] || [ ! -f "$SCRIPT" ]; then
+      echo "FATAL: could not locate infra/provisioning/install-k3s.sh under the mounted host filesystem." >&2
+      echo "       Lima mounts the macOS user's home at the same absolute path inside the VM; check that" >&2
+      echo "       this file is committed at infra/provisioning/install-k3s.sh in the repo and that the" >&2
+      echo "       repo lives somewhere under your home directory."                                     >&2
+      exit 1
+    fi
+    bash "$SCRIPT"
+
+# Step 2 — produce a host-friendly kubeconfig at /tmp/kubeconfig-
+# lima-social.yaml. The k3s.yaml the installer writes points at
+# https://127.0.0.1:6443 with context `default`. Rewrite to
+# https://127.0.0.1:16443 (the host-mapped port from portForwards
+# above) and rename the context to `lima-social` so it can drop into
+# ~/.kube/config alongside other entries without conflict. This step
+# is Lima-specific by design — it depends on the portForwards layout
+# this file declares — and therefore lives here, not in the shared
+# install script.
+- mode: system
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    install -m 0644 /etc/rancher/k3s/k3s.yaml /tmp/kubeconfig-lima-social.yaml
+    sed -i \
+      -e 's#https://127.0.0.1:6443#https://127.0.0.1:16443#g' \
+      -e 's#name: default#name: lima-social#g' \
+      -e 's#cluster: default#cluster: lima-social#g' \
+      -e 's#user: default#user: lima-social#g' \
+      -e 's#current-context: default#current-context: lima-social#g' \
+      /tmp/kubeconfig-lima-social.yaml
+
+# Surface the rewritten kubeconfig on the host. `{{.Dir}}` resolves
+# to the per-instance Lima dir (`~/.lima/lima-social/`); the host
+# operator can either point KUBECONFIG at this path directly or merge
+# it into ~/.kube/config via `kubectl config view --flatten`.
+copyToHost:
+- guest: "/tmp/kubeconfig-lima-social.yaml"
+  host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+  deleteOnStop: true

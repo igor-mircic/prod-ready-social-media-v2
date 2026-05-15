@@ -1,0 +1,15 @@
+# Local overlay — targets the Lima-hosted single-node k3s cluster.
+#
+# Inherits everything from ../../base. Local-specific patches go
+# here. The slice's PVC size (5Gi), storage class (local-path), and
+# resource caps (256Mi-1Gi memory, 0.25-2 CPU) are already declared
+# at base/postgres/values.yaml; they match local-dev intent today, so
+# this overlay carries no override patches in this slice. If/when the
+# base values tighten to production-realistic shapes (larger PVC,
+# bigger requests for the CAX21 envelope), this overlay is where the
+# laptop-scaled-down counterpatches will land.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base

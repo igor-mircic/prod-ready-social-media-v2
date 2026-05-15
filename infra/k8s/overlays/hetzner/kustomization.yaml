@@ -1,0 +1,31 @@
+# Hetzner overlay — PLACEHOLDER for the next slice
+# (add-hetzner-deploy).
+#
+# TODO (add-hetzner-deploy): the next slice will fill this overlay
+# in with the production-grade counterparts of the base resources:
+#
+#   - Replace the base postgres Secret with a Hetzner-safe Secret
+#     strategy (SOPS-encrypted-at-rest, Sealed Secrets controller,
+#     or imperative kubectl-from-password-manager — decision pending
+#     in the next slice). The plain Secret committed under
+#     infra/k8s/base/postgres/secret.yaml is a LOCAL-DEV credential
+#     and MUST NOT be reused on this overlay path. The slice will
+#     either remove the base secret and add a Hetzner-specific one,
+#     or replace the base secret via a strategic-merge patch that
+#     points at a different `existingSecret` name.
+#   - Add HetznerCloud LoadBalancer annotations on the postgres-lb
+#     Service (or replace it entirely if external access is gated
+#     differently — e.g. WireGuard-only access from the developer's
+#     machine).
+#   - Re-size primary.persistence (production capacity well above
+#     the local 5Gi).
+#   - Re-size primary.resources.requests/limits to the CAX21
+#     envelope (4 vCPU shared, 8 GiB RAM minus k3s overhead).
+#
+# Apply path is intentionally NOT wired into the justfile until the
+# Hetzner slice lands. `just k8s-apply` targets overlays/local only.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base
