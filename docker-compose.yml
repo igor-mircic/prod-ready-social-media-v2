@@ -19,6 +19,9 @@
 # Opt-in observability stack (default off):
 #   docker-compose --profile observability up -d
 #
+# Opt-in local OCI registry (default off):
+#   docker compose --profile registry up -d registry
+#
 # Backend credentials still match the backend's default Spring
 # profile in backend/src/main/resources/application.yaml — the
 # postgres user/password/database are the same on either side of
@@ -246,6 +249,36 @@ services:
     mem_limit: 256m
     cpus: 0.5
 
+  # Slice 15 (add-local-k3s-backend): a local OCI registry serves
+  # as the host-side image store for the in-cluster backend. The
+  # host pushes here via `./gradlew bootBuildImage -Ppublish=true`;
+  # the k3s VM pulls from here via the `registries.yaml` mirror
+  # rewrite the provision script installs (registry.local:5000 →
+  # http://host.lima.internal:5000). See README's "Run the backend
+  # in cluster (optional)" for the inner loop and the registry
+  # hostname asymmetry it documents.
+  #
+  # Bound to 127.0.0.1:5000 (NOT 0.0.0.0:5000) so the registry is
+  # reachable only from the host's loopback interface; anyone else
+  # on the local network cannot push. The Lima VM reaches it via
+  # its host.lima.internal alias, which routes through the same
+  # host loopback (port-forwarded automatically by Lima's vmnet).
+  #
+  # Hidden behind the `registry` compose profile so a plain
+  # `docker compose up` leaves it dormant. `just backend-image`
+  # brings the profile up implicitly before running bootBuildImage.
+  registry:
+    image: registry:2.8.3
+    container_name: social-registry
+    profiles: ["registry"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - registry-data:/var/lib/registry
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+
 volumes:
   # Slice 14 (add-local-k3s-postgres): no service mounts this
   # volume anymore — postgres now lives in k3s and uses a PVC
@@ -255,3 +288,10 @@ volumes:
   # this volume cleanly. Drop the declaration once the revert
   # window is no longer interesting.
   postgres-data:
+  # Slice 15 (add-local-k3s-backend): named volume backing the
+  # local OCI registry's /var/lib/registry. Survives `docker
+  # compose --profile registry down` so a re-pushed `:dev` tag
+  # does not refetch every layer. Delete with `docker volume rm
+  # prod-ready-social-media-v2_registry-data` if a clean slate is
+  # wanted.
+  registry-data:

@@ -95,6 +95,8 @@ configs:
 
 The exact "what is the host's IP from inside the VM" detail (`host.lima.internal`, `host.docker.internal`, or a `/etc/hosts`-injected `registry.local`) is the open question called out below; the *shape* is settled.
 
+**Decision update (slice implementation, 2026-05-16):** the pull-side hostname pods reference in their `image:` field is `registry.local:5000`. The `registries.yaml` mirror rewrite resolves it to `http://host.lima.internal:5000` — Lima's native host-resolver alias, which routes to the host loopback (where `127.0.0.1:5000` is bound). Push uses `127.0.0.1:5000` (not `localhost:5000`) because macOS's AirPlay Receiver squats on `::1:5000` and steals IPv6 traffic to `localhost` before it reaches the registry container.
+
 ### Decision 3 — Ingress is out of scope; access is via `kubectl port-forward`
 
 Slice 14's design.md called out Traefik-vs-ingress-nginx as a future decision triggered by "the first workload that needs an Ingress object". The backend *could* be that workload, but it does not *have* to be — the slice's purpose is to land the application-in-k3s loop, and adding an ingress object doubles the surface to get wrong while not making the slice any more useful (the host loop already serves on `localhost:8080`; the k3s backend only needs to be reachable for debugging).
@@ -128,6 +130,8 @@ The agent jar is added to the image during `bootBuildImage` and the image's envi
 - **Post-build Docker layer.** After `bootBuildImage` produces the OCI image, a follow-up `docker build` step adds a `FROM` line referencing the buildpack output, `COPY`s the agent jar into `/workspace/agent/`, and sets `ENV JAVA_TOOL_OPTIONS=-javaagent:/workspace/agent/opentelemetry-javaagent.jar`. Less elegant but more obvious to a reader who is not deep in buildpack internals.
 
 The slice picks one of the two at implementation time; both are acceptable. The design rule is "preserve the agent attach mechanic from the host loop, do not introduce sidecar / initContainer / Operator complexity." See open questions for which path is chosen.
+
+**Decision update (slice implementation, 2026-05-16):** post-build Docker layer wins. Implementation: a checked-in `backend/docker/agent/Dockerfile` declares `FROM ${BASE_IMAGE}` + a plain `COPY opentelemetry-javaagent.jar /workspace/agent/opentelemetry-javaagent.jar` + `ENV JAVA_TOOL_OPTIONS=-javaagent:...`; Gradle's `bootBuildImage` task is configured to produce `<imageName>-base`, and a follow-up `bakeBackendImage` Exec task runs `docker build` against that Dockerfile with `--build-arg BASE_IMAGE=<imageName>-base`. The Paketo base is distroless (no `/bin/sh`), so RUN steps are not available — the bake is COPY+ENV only. `COPY --chmod=` is deliberately NOT used: BuildKit applies that mode to intermediate directories it creates, which would render `/workspace/agent/` unreadable (0644 on a directory blocks JVM traversal); plain COPY leaves the directory at 0755 and the file at 0644.
 
 Rejected:
 

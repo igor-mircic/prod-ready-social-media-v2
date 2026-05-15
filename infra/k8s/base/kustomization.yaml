@@ -20,3 +20,4 @@ namespace: social
 resources:
 - ./namespace.yaml
 - ./postgres
+- ./backend

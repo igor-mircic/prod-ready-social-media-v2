@@ -19,6 +19,13 @@ public class SecurityConfig {
 
   static final String[] PERMIT_ALL_GETS = {
     "/actuator/health",
+    // /liveness and /readiness are Kubernetes-shaped sub-paths Spring Boot
+    // exposes when probes auto-detection engages (KUBERNETES_SERVICE_HOST
+    // env var present). The slice-15 in-cluster Deployment's livenessProbe
+    // and readinessProbe hit these endpoints, so they need to be
+    // unauthenticated like /actuator/health itself.
+    "/actuator/health/liveness",
+    "/actuator/health/readiness",
     // TODO(prod): in production, run actuator on management.server.port and remove these
     // allowlist entries.
     "/actuator/info",

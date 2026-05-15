@@ -1,0 +1,29 @@
+# Backend workload — plain-resource Kustomize component.
+#
+# Unlike the postgres sibling (which wraps Bitnami's chart via
+# `helmCharts:`), the backend deploy is hand-written YAML: a single
+# Deployment + a ClusterIP Service. The pattern follows slice 15's
+# spec — `helmCharts:` workloads and plain-resource workloads coexist
+# as sibling subdirectories under `infra/k8s/base/`.
+#
+# The image reference (`registry.local:5000/backend:dev`) matches the
+# hostname that the k3s `registries.yaml` mirror rewrites to
+# `http://host.lima.internal:5000`. The push side of that asymmetry
+# (`127.0.0.1:5000/backend:dev`) lives in `backend/build.gradle.kts`;
+# the cluster-pull side lives here. README's "Run the backend in
+# cluster (optional)" section documents both ends.
+#
+# Common labels applied to every generated resource: this is what
+# the slice's `backend-delete` `just` recipe uses to scope its
+# `kubectl delete -l ...` invocation.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: backend
+
+resources:
+  - ./deployment.yaml
+  - ./service.yaml

@@ -1,0 +1,22 @@
+# Backend Service — ClusterIP only.
+#
+# Slice 15 deliberately ships no Ingress and no LoadBalancer (the
+# Traefik-vs-ingress-nginx decision is rolled forward — see
+# design.md Decision 3). Developer access is via the `just
+# backend-forward` recipe, which `kubectl port-forward`s 18080
+# → 8080. The Service's selector is satisfied by the
+# `app.kubernetes.io/name: backend` label that the sibling
+# kustomization.yaml applies across every resource.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

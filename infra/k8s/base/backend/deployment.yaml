@@ -1,0 +1,110 @@
+# Backend Deployment — one replica, in the `social` namespace
+# (inherited from `infra/k8s/base/kustomization.yaml`'s `namespace:`).
+#
+# Image: `registry.local:5000/backend:dev`. The hostname is the
+# k3s containerd-side alias; the registry's host-side bind is
+# `127.0.0.1:5000` and the cluster reaches it via the
+# `registries.yaml` mirror rewrite to `http://host.lima.internal:5000`.
+# See design.md Decisions 2 and 5 and README's "Run the backend in
+# cluster (optional)" for the full picture.
+#
+# Env:
+#   - SPRING_DATASOURCE_{USERNAME,PASSWORD} via `valueFrom.secretKeyRef`
+#     against the existing `postgres-credentials` Secret (the same
+#     Secret the postgres workload consumes; slice 15 does not
+#     declare a new Secret resource).
+#   - SPRING_DATASOURCE_URL set to the FQDN of the chart-bundled
+#     ClusterIP Service (`postgres-postgresql.social.svc.cluster.local`),
+#     NOT the slice-14 LoadBalancer (`postgres-lb`). LoadBalancer is
+#     for the host loop only — in-cluster traffic stays inside the
+#     cluster (see design.md Decision 10).
+#   - OTEL_EXPORTER_OTLP_ENDPOINT pointed at the still-in-compose
+#     collector via `host.lima.internal:4318` — Lima's host alias
+#     (verified to resolve from a pod in slice implementation).
+#     This is the slice's transitional choice; a future
+#     observability-migration slice replaces this target with an
+#     in-cluster Service DNS name (see design.md Decision 6 and the
+#     `observability` spec delta).
+#
+# Probes (design.md Decision 9):
+#   - startupProbe: 5s × 30 = 150s grace for JVM cold start +
+#     Flyway. Once it succeeds, livenessProbe and readinessProbe
+#     take over (Spring Boot's ApplicationAvailability flips
+#     `/readiness` green only after the app context finishes
+#     wiring + Flyway completes).
+#   - livenessProbe: kills wedged JVMs without overreacting to
+#     transient 5xx.
+#   - readinessProbe: gates Service traffic on application
+#     readiness without a separate init step.
+#
+# Resources: 250m / 512Mi requests, 1000m / 1.5Gi limits. 1.5Gi
+# leaves the JVM ~1Gi heap room with overhead for metaspace, native,
+# and the OTel agent. The numbers transfer 1:1 to the CAX21 envelope
+# (slice 16 will use the same values via the hetzner overlay).
+#
+# Image pull policy is intentionally NOT set here — the local
+# overlay patches it to `Always` so iterating on the floating
+# `:dev` tag picks up new pushes; the hetzner overlay (future)
+# will keep the default `IfNotPresent` and pin by digest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backend
+    spec:
+      containers:
+        - name: backend
+          image: registry.local:5000/backend:dev
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgres-postgresql.social.svc.cluster.local:5432/social
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://host.lima.internal:4318
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1.5Gi
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
