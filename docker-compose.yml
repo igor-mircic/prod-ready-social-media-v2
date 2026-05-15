@@ -8,7 +8,7 @@
 # Start with: docker-compose up -d postgres
 #
 # Opt-in observability stack (Prometheus + Grafana + Tempo + Collector + Loki
-# + Alertmanager, default off):
+# + Alertmanager + postgres-exporter, default off):
 #   docker-compose --profile observability up -d
 #
 # Credentials below match the backend's default Spring profile in
@@ -24,13 +24,47 @@ services:
       POSTGRES_DB: social
       POSTGRES_USER: social
       POSTGRES_PASSWORD: social
+    # Slice 12: load `pg_stat_statements` at server start so per-statement
+    # metrics are available to `postgres-exporter` (`observability` profile).
+    # The library ships with the official `postgres:16-alpine` image — no
+    # image rebuild needed. The companion init script
+    # `infra/observability/postgres/init/01-pg-stat-statements.sql` runs the
+    # `CREATE EXTENSION` once on a fresh data directory.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./infra/observability/postgres/init/01-pg-stat-statements.sql:/docker-entrypoint-initdb.d/01-pg-stat-statements.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U social -d social"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  postgres-exporter:
+    # Slice 12: surfaces Postgres internals to Prometheus — pg_stat_database
+    # transactions/connections, pg_settings_max_connections, and the
+    # custom-queries projection of pg_stat_statements declared in
+    # infra/observability/postgres-exporter/queries.yaml. Only runs under
+    # the `observability` profile; the default compose invocation does NOT
+    # start it. Pinned by tag (not `latest`), matching the convention used
+    # by `prometheus`, `grafana`, `alertmanager`, etc.
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: social-postgres-exporter
+    profiles: ["observability"]
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_URI: "postgres:5432/social?sslmode=disable"
+      DATA_SOURCE_USER: "social"
+      DATA_SOURCE_PASS: "social"
+      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yaml"
+    volumes:
+      - ./infra/observability/postgres-exporter/queries.yaml:/etc/postgres-exporter/queries.yaml:ro
+    depends_on:
+      - postgres
 
   prometheus:
     image: prom/prometheus:v2.55.1
