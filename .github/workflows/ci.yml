@@ -96,7 +96,9 @@ jobs:
             --entrypoint promtool \
             -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
             prom/prometheus:v2.55.1 \
-            check rules /rules/slo-recording.yml /rules/slo-alerting.yml
+            check rules \
+              /rules/slo-recording.yml /rules/slo-alerting.yml \
+              /rules/fe-slo-recording.yml /rules/fe-slo-alerting.yml
 
       - name: Run rule unit tests (promtool test rules)
         run: |
@@ -104,7 +106,7 @@ jobs:
             --entrypoint promtool \
             -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
             prom/prometheus:v2.55.1 \
-            test rules /rules/slo-tests.yml
+            test rules /rules/slo-tests.yml /rules/fe-slo-tests.yml
 
   frontend:
     name: frontend (gen + test + build)
