@@ -103,17 +103,20 @@
         {
           "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket[1m])) by (le, uri))",
           "legendFormat": "p50 {{uri}}",
-          "refId": "A"
+          "refId": "A",
+          "exemplar": true
         },
         {
           "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket[1m])) by (le, uri))",
           "legendFormat": "p95 {{uri}}",
-          "refId": "B"
+          "refId": "B",
+          "exemplar": true
         },
         {
           "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[1m])) by (le, uri))",
           "legendFormat": "p99 {{uri}}",
-          "refId": "C"
+          "refId": "C",
+          "exemplar": true
         }
       ]
     },

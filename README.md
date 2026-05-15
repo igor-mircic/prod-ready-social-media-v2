@@ -497,6 +497,54 @@ docker-compose --profile observability restart prometheus
 (The Grafana datasource provisioning has the same restart requirement — see
 the prior subsection's notes on the slice-4 / slice-5 datasource files.)
 
+### Exemplars (metric → trace one-click pivot)
+
+The same observability profile lights up Prometheus exemplar storage and a
+Grafana panel-to-Tempo pivot, so a high-latency bucket on the
+`http_server_requests_seconds_bucket` histogram is one click away from the
+trace that produced it:
+
+```sh
+docker-compose --profile observability up -d
+```
+
+What's wired:
+
+- The backend's `/actuator/prometheus` endpoint serves OpenMetrics on
+  `Accept: application/openmetrics-text`. Each histogram bucket recorded
+  while an OTel span was active carries an exemplar suffix
+  (`# {trace_id="…",span_id="…"} <value> <ts>`). The bridge to the OTel
+  Java agent's active span is the `OpenTelemetryAgentSpanContext` bean in
+  `ExemplarsConfig`.
+- Prometheus runs with `--enable-feature=exemplar-storage`, so the
+  scraped exemplars survive ingestion and surface via
+  `/api/v1/query_exemplars`.
+- The Grafana Prometheus datasource has `exemplarTraceIdDestinations`
+  pointing at the Tempo datasource (UID `tempo`), so any panel with the
+  exemplars query option enabled renders diamond markers that open the
+  matching trace in Tempo on click.
+
+Click-path: `Backend overview → "p50 / p95 / p99 latency by URI" → click
+an exemplar diamond → Tempo trace view`. Exemplars only appear once the
+panel's time range covers a sample taken under an active span; drive a
+few requests against the running backend, wait one scrape interval
+(15 s), and the diamonds fill in.
+
+**Datasource provisioning restart caveat:** Grafana reads provisioning
+files only at container start. After editing
+`infra/observability/grafana/provisioning/datasources/prometheus.yaml`,
+restart Grafana so the new `jsonData.exemplarTraceIdDestinations` (or
+any other datasource change) takes effect:
+
+```sh
+docker-compose --profile observability restart grafana
+```
+
+**Frontend exemplars are deferred:** the OTel Collector's `prometheus`
+exporter does not synthesize exemplars from FE OTLP histograms in this
+slice, so the Frontend overview dashboard's panels do not yet carry the
+metric→trace pivot.
+
 ## Prerequisites
 
 - Java 21

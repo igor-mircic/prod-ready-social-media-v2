@@ -6,9 +6,9 @@ The Spring Boot backend SHALL be configured so that its `/actuator/prometheus` e
 
 Each exemplar line SHALL carry a label named `trace_id` whose value is the 32-lowercase-hex W3C trace id of the active span at sample time. Exemplar lines SHALL also include a `span_id` label (16-lowercase-hex) when the active span context provides one.
 
-The exemplar emission SHALL rely on Micrometer's built-in `ExemplarSampler` (or its equivalent Spring Boot auto-configuration) seeded from the OTel API. No bespoke per-meter instrumentation code SHALL be required at recording sites.
+The exemplar emission SHALL rely on the Spring Boot Actuator's built-in path: `PrometheusMetricsExportAutoConfiguration` constructs `PrometheusMeterRegistry` with an `ObjectProvider<io.prometheus.metrics.tracer.common.SpanContext>` and queries the bean (when present) on every observation. No bespoke per-meter instrumentation code SHALL be required at recording sites.
 
-The configuration switch SHALL live in `backend/src/main/resources/application.yml` (or `application.properties`) under the `management.*` property tree and SHALL NOT require classpath changes beyond the OTel Java agent that slice 3 already installed.
+The exemplar emission SHALL be enabled by either an Actuator property under `management.*` or by a `@Configuration`-class-registered `SpanContext` bean — whichever the pinned Spring Boot version requires. Under Spring Boot 4.0.6 (the pinned version) no exemplar property exists; emission triggers on bean presence. The smallest dependency providing an OTel-agent-aware `SpanContext` (`io.prometheus:prometheus-metrics-tracer-otel-agent`, shaded against the agent's bootstrap OTel API) MAY be added to the runtime classpath — it is not transitively present via `micrometer-registry-prometheus`.
 
 #### Scenario: OpenMetrics scrape against a running backend returns exemplar lines
 - **GIVEN** the backend is running with the OTel Java agent attached and at least one HTTP request has been served while a span was active

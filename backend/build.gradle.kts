@@ -35,6 +35,13 @@ val agent: Configuration by configurations.creating {
 dependencies {
 	implementation(libs.spring.boot.starter.actuator)
 	implementation(libs.micrometer.registry.prometheus)
+	// Provides `OpenTelemetryAgentSpanContext`, the implementation of
+	// `io.prometheus.metrics.tracer.common.SpanContext` we register as a bean
+	// in `ExemplarsConfig`. The library is shaded against the OTel Java
+	// agent's own copy of `io.opentelemetry.api.*` (see the artifact POM's
+	// `maven-shade-plugin` relocation), so it reads the active span from the
+	// agent's bootstrap classloader — exactly what we need at exemplar time.
+	implementation(libs.prometheus.metrics.tracer.otel.agent)
 	implementation(libs.spring.boot.starter.data.jpa)
 	implementation(libs.spring.boot.starter.flyway)
 	implementation(libs.spring.boot.starter.validation)

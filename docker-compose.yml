@@ -38,6 +38,17 @@ services:
     profiles: ["observability"]
     ports:
       - "9090:9090"
+    # Slice 9: `--enable-feature=exemplar-storage` lights up Prometheus's
+    # in-memory exemplar TSDB so the BE-emitted OpenMetrics exemplars on
+    # `http_server_requests_seconds_bucket` survive ingestion and surface via
+    # `/api/v1/query_exemplars`. Overriding `command:` requires re-stating the
+    # image's defaults the rest of this slice depends on (config file path,
+    # TSDB path) — anything we drop here gets dropped from the running
+    # container too.
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--enable-feature=exemplar-storage"
     volumes:
       - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       # Slice 8: SLO recording + alerting rules + promtool test fixture.
