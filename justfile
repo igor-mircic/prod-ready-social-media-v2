@@ -40,13 +40,21 @@ vm-down:
 vm-shell:
     limactl shell {{VM_NAME}}
 
-# Render the local overlay with `--enable-helm` and apply. After
-# the apply, wait up to 120 s for the postgres pod to reach Ready —
-# this avoids the "apply returned but the pod is still pulling its
-# image" race on a cold cluster.
+# Render the local overlay with `--enable-helm` and apply. Wait
+# briefly for the StatefulSet to spawn its pod, then up to 180 s
+# for it to reach Ready. The sleep avoids the "apply returned but
+# the StatefulSet has not created its pod yet" race that makes
+# `kubectl wait` exit immediately with "no matching resources
+# found". After Ready, force-run the pg_stat_statements
+# CREATE EXTENSION via `kubectl exec` — Bitnami chart 15.5.38's
+# auto-execution of `/docker-entrypoint-initdb.d/*.sql` mounted
+# from `primary.initdb.scripts` is unreliable in this release, so
+# we belt-and-braces it. The SQL is idempotent.
 k8s-apply:
     kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
-    kubectl wait --for=condition=Ready pod -l {{PG_LABEL}} -n {{PG_NAMESPACE}} --timeout=120s
+    @sleep 5
+    kubectl wait --for=condition=Ready pod -l {{PG_LABEL}} -n {{PG_NAMESPACE}} --timeout=180s
+    kubectl exec -n {{PG_NAMESPACE}} postgres-postgresql-0 -- bash -c 'PGPASSWORD="$POSTGRES_POSTGRES_PASSWORD" psql -U postgres -d social -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"'
 
 # Show the cluster-vs-manifest delta. `kubectl diff` exits non-zero
 # when changes are present (by design); the leading `-` tells just

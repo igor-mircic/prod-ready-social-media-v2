@@ -35,11 +35,13 @@ cpus: 4
 memory: "8GiB"
 disk: "64GiB"
 
-# Pinned Ubuntu 24.04 LTS cloud image. Explicit release date — NOT
-# `release: latest` — so a fresh `limactl start` boots a known
-# kernel + userland combination. Bump deliberately.
+# Pinned Ubuntu 24.04 LTS (Noble) cloud image. Explicit release
+# date — NOT `release: latest` — so a fresh `limactl start` boots a
+# known kernel + userland combination. Bump deliberately. The
+# canonical URL uses the codename (`noble/`) rather than the version
+# number (`24.04/`).
 images:
-- location: "https://cloud-images.ubuntu.com/releases/24.04/release-20250214/ubuntu-24.04-server-cloudimg-arm64.img"
+- location: "https://cloud-images.ubuntu.com/releases/noble/release-20260321/ubuntu-24.04-server-cloudimg-arm64.img"
   arch: "aarch64"
 
 # Lima mounts the macOS user's home directory at the same absolute

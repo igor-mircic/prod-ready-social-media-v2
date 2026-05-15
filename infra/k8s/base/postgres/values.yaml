@@ -6,6 +6,15 @@
 # point.
 
 image:
+  # Bitnami migrated `docker.io/bitnami/<workload>:<version>` to
+  # authenticated `bitnamisecure/` mirrors in mid-2025; only `:latest`
+  # remains free under `docker.io/bitnami/postgresql`. The Bitnami-
+  # maintained `docker.io/bitnamilegacy/postgresql` namespace preserves
+  # the old versioned tags as the free path, so we point the chart at
+  # it. A future slice may swap to CloudNativePG (captured in
+  # design.md) or to an authenticated `bitnamisecure/` pull strategy.
+  registry: docker.io
+  repository: bitnamilegacy/postgresql
   # Pinned 16.x tag. NOT `latest`. Re-pin alongside the chart bump.
   tag: 16.6.0-debian-12-r2
 
@@ -41,6 +50,16 @@ primary:
   # end. The standalone init file is left in place for slice-12
   # audit traceability; a follow-up cleanup may remove it once
   # nothing references it.
+  #
+  # NOTE (Bitnami chart 15.5.38 quirk): the chart renders a
+  # ConfigMap from these scripts and mounts it under
+  # `/docker-entrypoint-initdb.d/` correctly, but its custom-scripts
+  # loop silently skips the .sql file on first boot in this release.
+  # The `just k8s-apply` recipe runs `CREATE EXTENSION IF NOT EXISTS
+  # pg_stat_statements` against the pod via `kubectl exec` as a
+  # belt-and-braces step. Keep this block here so a future chart
+  # version that fixes the bug works without changes; the manual
+  # post-apply step is idempotent and harmless either way.
   initdb:
     scripts:
       01-pg-stat-statements.sql: |
