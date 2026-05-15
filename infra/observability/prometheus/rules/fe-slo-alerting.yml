@@ -1,0 +1,73 @@
+# Frontend SLO alerting rules — multi-window multi-burn-rate page alerts for
+# the LCP and INP SLOs.
+#
+# Pattern (Google SRE Workbook, ch.5), matching `slo-alerting.yml`:
+#   fast page : long=1h × short=5m   burn_rate=14.4   for: 2m
+#   slow page : long=6h × short=30m  burn_rate=6      for: 15m
+#
+# Burn rate N means "consuming the 30d budget N× faster than allowed".
+# Threshold on the slow-fraction recording rule is N * (1 - SLO_target).
+# Targets are 95% (see `design.md` Decision 1), so:
+#   fast: 14.4 * (1 - 0.95) = 0.72
+#   slow: 6   * (1 - 0.95) = 0.30
+#
+# No 3d ticket alert — FE latency SLOs match backend latency SLOs.
+#
+# Every alert carries three routing-contract labels:
+#   severity = page
+#   slo      = lcp | inp
+#   service  = frontend
+groups:
+  - name: fe_slo_alerting
+    rules:
+      - alert: LcpSloFastBurn
+        expr: |
+          job:slo_lcp:slow_ratio_rate1h > (14.4 * (1 - 0.95))
+          and
+          job:slo_lcp:slow_ratio_rate5m > (14.4 * (1 - 0.95))
+        for: 2m
+        labels:
+          severity: page
+          slo: lcp
+          service: frontend
+        annotations:
+          summary: "LCP burning 30d budget very fast (fast-burn)."
+
+      - alert: LcpSloSlowBurn
+        expr: |
+          job:slo_lcp:slow_ratio_rate6h > (6 * (1 - 0.95))
+          and
+          job:slo_lcp:slow_ratio_rate30m > (6 * (1 - 0.95))
+        for: 15m
+        labels:
+          severity: page
+          slo: lcp
+          service: frontend
+        annotations:
+          summary: "LCP burning 30d budget fast (slow-burn page)."
+
+      - alert: InpSloFastBurn
+        expr: |
+          job:slo_inp:slow_ratio_rate1h > (14.4 * (1 - 0.95))
+          and
+          job:slo_inp:slow_ratio_rate5m > (14.4 * (1 - 0.95))
+        for: 2m
+        labels:
+          severity: page
+          slo: inp
+          service: frontend
+        annotations:
+          summary: "INP burning 30d budget very fast (fast-burn)."
+
+      - alert: InpSloSlowBurn
+        expr: |
+          job:slo_inp:slow_ratio_rate6h > (6 * (1 - 0.95))
+          and
+          job:slo_inp:slow_ratio_rate30m > (6 * (1 - 0.95))
+        for: 15m
+        labels:
+          severity: page
+          slo: inp
+          service: frontend
+        annotations:
+          summary: "INP burning 30d budget fast (slow-burn page)."

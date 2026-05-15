@@ -255,6 +255,166 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 14,
+      "title": "SLO",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 15,
+      "title": "LCP error budget headroom (last 6h)",
+      "description": "Fraction of the 5% LCP error budget still unused over the last 6h. 1.0 = full budget; 0 = budget exhausted; < 0 = burn over budget. 6h proxy for at-a-glance dashboarding — the 30d framing lives in the alert names and the README.",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.25 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "1 - (job:slo_lcp:slow_ratio_rate6h / 0.05)",
+          "legendFormat": "LCP",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "INP error budget headroom (last 6h)",
+      "description": "Fraction of the 5% INP error budget still unused over the last 6h. 1.0 = full budget; 0 = budget exhausted; < 0 = burn over budget. 6h proxy for at-a-glance dashboarding — the 30d framing lives in the alert names and the README.",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.25 },
+              { "color": "green", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "1 - (job:slo_inp:slow_ratio_rate6h / 0.05)",
+          "legendFormat": "INP",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "Burn rate (1h)",
+      "description": "Current 1h burn rate per SLO, expressed as a multiplier of the 5% budget. A constant burn rate of 1 exhausts the 30d budget in exactly 30d; ≥ 14.4 trips the fast-burn page.",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 50 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {},
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "job:slo_lcp:slow_ratio_rate1h / 0.05",
+          "legendFormat": "LCP",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "job:slo_inp:slow_ratio_rate1h / 0.05",
+          "legendFormat": "INP",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "LCP p75 vs SLO threshold (2500ms)",
+      "description": "p75 of web_vitals_lcp (5m rate) with a static 2500 ms reference line marking the SLO threshold.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 2500 }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": { "mode": "line" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.75, sum(rate(web_vitals_lcp_bucket{service_name=\"frontend\"}[5m])) by (le))",
+          "legendFormat": "LCP p75",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "title": "INP p75 vs SLO threshold (200ms)",
+      "description": "p75 of web_vitals_inp (5m rate) with a static 200 ms reference line marking the SLO threshold.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 200 }
+            ]
+          },
+          "custom": {
+            "thresholdsStyle": { "mode": "line" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.75, sum(rate(web_vitals_inp_bucket{service_name=\"frontend\"}[5m])) by (le))",
+          "legendFormat": "INP p75",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "10s",

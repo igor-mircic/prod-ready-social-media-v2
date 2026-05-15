@@ -349,6 +349,28 @@ alerting / SLO definitions are the natural follow-up slice — it
 layers on top of this metrics path, the slice-5 trace path, and
 the slice-7 error path.
 
+**Frontend SLOs (LCP, INP).** Four multi-window multi-burn-rate
+alerts ride on top of the Web Vitals histograms above:
+`LcpSloFastBurn`, `LcpSloSlowBurn`, `InpSloFastBurn`,
+`InpSloSlowBurn`. They evaluate two SLO targets — LCP `95%` of page
+loads `< 2500` ms, INP `95%` of interactions `< 200` ms, both over
+a 30 d window — using the same burn-rate constants as the backend
+latency SLOs (fast-page 14.4× over 1h+5m, slow-page 6× over
+6h+30m). Each alert carries `severity=page`, `slo=lcp|inp`, and
+`service=frontend` labels. The Frontend overview dashboard's
+`SLO` row surfaces the same SLOs at a glance: error budget
+headroom (last 6 h), current 1 h burn rate per SLO, and p75 vs
+SLO threshold for LCP and INP. The recording rules backing the
+alerts read the `le="2500"` (LCP) and `le="200"` (INP) buckets,
+which `frontend/src/observability/meter.ts` pins via per-instrument
+`advice.explicitBucketBoundaries`. The Prometheus rule files
+(`fe-slo-recording.yml`, `fe-slo-alerting.yml`,
+`fe-slo-tests.yml`) live alongside the backend ones in
+`infra/observability/prometheus/rules/`. Reminder: Prometheus must
+be restarted (`docker-compose --profile observability restart
+prometheus`) for `rule_files:` changes to take effect — same caveat
+as the slice-8 Alerting subsection below.
+
 ### Frontend errors
 
 The frontend captures every uncaught browser exception across four

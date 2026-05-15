@@ -22,6 +22,11 @@ global:
 rule_files:
   - rules/slo-recording.yml
   - rules/slo-alerting.yml
+  # Slice 10: frontend SLO recording + alerting rules. Backed by the
+  # `web_vitals_lcp_bucket{le="2500"}` and `web_vitals_inp_bucket{le="200"}`
+  # series emitted via the OTel Collector under `service_name="frontend"`.
+  - rules/fe-slo-recording.yml
+  - rules/fe-slo-alerting.yml
 
 # Slice 8: route firings to the Alertmanager container on the shared docker
 # network. The compose service name is `alertmanager`; its HTTP API is on

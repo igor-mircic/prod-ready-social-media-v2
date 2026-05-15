@@ -1,0 +1,139 @@
+# promtool test rules — executable spec for the FE SLO alerting rules.
+#
+# Mirrors `slo-tests.yml` (backend SLOs) in shape: each stanza feeds crafted
+# synthetic series into the FE recording + alerting rule files, evaluates at
+# a simulated eval_time, and asserts which alerts are (or aren't) in firing
+# state.
+#
+# Run from the repo root with:
+#
+#   docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+#     prom/prometheus:v2.55.1 test rules /rules/fe-slo-tests.yml
+#
+# Coverage maps spec scenarios one-for-one:
+#   - LcpSloFastBurn   : fires under all-slow LCP samples at 70m
+#   - LcpSloSlowBurn   : fires under all-slow LCP samples at 7h
+#   - InpSloFastBurn   : fires under all-slow INP samples at 70m
+#   - InpSloSlowBurn   : fires under all-slow INP samples at 7h
+#   - steady-state: 24h of all-fast LCP+INP traffic fires nothing.
+#
+# Alerts inherit `service=frontend` from the alerting rules and gain the
+# `severity` + `slo` routing labels. exp_annotations carries the rule's
+# summary verbatim.
+rule_files:
+  - fe-slo-recording.yml
+  - fe-slo-alerting.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # 1. LcpSloFastBurn — every LCP sample slower than 2500ms.
+  # bucket{le="2500"} stays at 0; _count climbs → slow-ratio = 1.0
+  # which exceeds both the 5m and 1h thresholds (0.72).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'web_vitals_lcp_bucket{service_name="frontend", le="2500"}'
+        values: '0x90'
+      - series: 'web_vitals_lcp_count{service_name="frontend"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LcpSloFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: lcp
+              service: frontend
+            exp_annotations:
+              summary: "LCP burning 30d budget very fast (fast-burn)."
+
+  # ---------------------------------------------------------------------------
+  # 2. LcpSloSlowBurn — every LCP sample slow over 6h+.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'web_vitals_lcp_bucket{service_name="frontend", le="2500"}'
+        values: '0x440'
+      - series: 'web_vitals_lcp_count{service_name="frontend"}'
+        values: '0+10x440'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: LcpSloSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: lcp
+              service: frontend
+            exp_annotations:
+              summary: "LCP burning 30d budget fast (slow-burn page)."
+
+  # ---------------------------------------------------------------------------
+  # 3. InpSloFastBurn — every INP sample slower than 200ms.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'web_vitals_inp_bucket{service_name="frontend", le="200"}'
+        values: '0x90'
+      - series: 'web_vitals_inp_count{service_name="frontend"}'
+        values: '0+10x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: InpSloFastBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: inp
+              service: frontend
+            exp_annotations:
+              summary: "INP burning 30d budget very fast (fast-burn)."
+
+  # ---------------------------------------------------------------------------
+  # 4. InpSloSlowBurn — every INP sample slow over 6h+.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'web_vitals_inp_bucket{service_name="frontend", le="200"}'
+        values: '0x440'
+      - series: 'web_vitals_inp_count{service_name="frontend"}'
+        values: '0+10x440'
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: InpSloSlowBurn
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: inp
+              service: frontend
+            exp_annotations:
+              summary: "INP burning 30d budget fast (slow-burn page)."
+
+  # ---------------------------------------------------------------------------
+  # 5. Steady-state: 24h where every LCP and INP sample is fast (in the
+  # le="2500" / le="200" bucket). All four FE alerts must stay quiet.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'web_vitals_lcp_bucket{service_name="frontend", le="2500"}'
+        values: '0+10x1500'
+      - series: 'web_vitals_lcp_count{service_name="frontend"}'
+        values: '0+10x1500'
+      - series: 'web_vitals_inp_bucket{service_name="frontend", le="200"}'
+        values: '0+10x1500'
+      - series: 'web_vitals_inp_count{service_name="frontend"}'
+        values: '0+10x1500'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: LcpSloFastBurn
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: LcpSloSlowBurn
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: InpSloFastBurn
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: InpSloSlowBurn
+        exp_alerts: []

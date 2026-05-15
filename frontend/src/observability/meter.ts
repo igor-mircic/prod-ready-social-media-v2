@@ -64,9 +64,24 @@ export function bootstrapMetrics(): void {
 
   const meter = metrics.getMeter('frontend')
 
-  const lcpHistogram = meter.createHistogram('web_vitals_lcp')
+  // Slice 10: pin explicit bucket boundaries on LCP and INP so the SLO
+  // recording rules can read precise `le="2500"` (LCP) and `le="200"` (INP)
+  // buckets — the OTel SDK defaults include 2500 but not 200. Configured via
+  // per-instrument `advice.explicitBucketBoundaries` (OTel JS API ≥ 1.7.0,
+  // supported by the pinned SDK 2.7.x). FCP/CLS/TTFB keep SDK defaults.
+  const lcpHistogram = meter.createHistogram('web_vitals_lcp', {
+    advice: {
+      explicitBucketBoundaries: [
+        500, 1000, 1500, 2000, 2500, 3500, 5000, 7500, 10000,
+      ],
+    },
+  })
   const clsHistogram = meter.createHistogram('web_vitals_cls')
-  const inpHistogram = meter.createHistogram('web_vitals_inp')
+  const inpHistogram = meter.createHistogram('web_vitals_inp', {
+    advice: {
+      explicitBucketBoundaries: [25, 50, 75, 100, 150, 200, 300, 500, 1000],
+    },
+  })
   const fcpHistogram = meter.createHistogram('web_vitals_fcp')
   const ttfbHistogram = meter.createHistogram('web_vitals_ttfb')
 
