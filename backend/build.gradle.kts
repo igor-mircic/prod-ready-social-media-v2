@@ -1,3 +1,4 @@
+import org.springframework.boot.gradle.tasks.bundling.BootBuildImage
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 import org.springframework.boot.gradle.tasks.run.BootRun
 
@@ -146,6 +147,109 @@ tasks.withType<Test> {
 	otelEnvDefaults.forEach { (k, v) ->
 		if (System.getenv(k) == null) environment(k, v)
 	}
+}
+
+// Slice 15 (add-local-k3s-backend): bootBuildImage publish + OTel agent bake.
+//
+// Goal: a single `./gradlew bootBuildImage -Ppublish=true` invocation builds
+// an arm64 OCI image with the OTel Java agent baked in at a stable path
+// (/workspace/agent/opentelemetry-javaagent.jar) and pushes it to the local
+// registry tagged `registry.local:5000/backend:dev`. The chain:
+//
+//   bootBuildImage          → produces <imageName>-base via Paketo buildpacks
+//     finalizedBy
+//   bakeBackendImage        → docker build over <imageName>-base, adds the
+//                             agent jar and JAVA_TOOL_OPTIONS env, tags
+//                             <imageName>
+//     finalizedBy (only when -Ppublish=true)
+//   pushBackendImage        → docker push <imageName>
+//
+// The buildpack output is kept as an intermediate `<imageName>-base` tag so
+// the registry only ever sees the final agent-baked image; the base tag is a
+// local-only artifact that can be `docker rmi`'d at any time. The `-base`
+// suffix is appended deterministically from `imageName` so a Hetzner override
+// (`-PimageName=ghcr.io/<owner>/backend:<sha>`) produces a matching base tag.
+//
+// `imagePlatform = linux/arm64` matches the Lima VM and the future CAX21
+// Hetzner box. Apple Silicon hosts produce arm64 images natively; on x86
+// hosts buildpacks would refuse this target (no cross-build path) — a
+// deliberate choice, since we never run an x86 backend in this project.
+//
+// `publish=false` on bootBuildImage: we never push the buildpack-output base
+// tag. The push happens after the bake, scoped to the final tag only.
+val backendImageName: Provider<String> = providers.gradleProperty("imageName")
+	.orElse("registry.local:5000/backend:dev")
+val backendBaseImageName: Provider<String> = backendImageName.map { "$it-base" }
+// Push tag asymmetry: the cluster references `registry.local:5000/...` in
+// the pod manifest (resolved via the k3s `registries.yaml` mirror that
+// rewrites to `http://host.lima.internal:5000`), but the host has no
+// `registry.local` DNS entry — `docker push registry.local:5000/...` would
+// fail with "no such host". So the push target swaps the registry-local
+// alias for `127.0.0.1`, which IS the address the local registry container
+// binds to. The result is one image content with two equivalent tags
+// pointing at the same underlying registry. A Hetzner override
+// (`-PimageName=ghcr.io/<owner>/backend:<sha>`) skips this rewrite because
+// `ghcr.io` resolves identically from the host and from the cluster — the
+// `-PpushTag=` property lets the override hand-set the push tag if a future
+// registry needs a different shape.
+val backendPushTag: Provider<String> = providers.gradleProperty("pushTag")
+	.orElse(backendImageName.map { it.replaceFirst(Regex("^registry\\.local:5000/"), "127.0.0.1:5000/") })
+val publishBackendImage: Boolean = providers.gradleProperty("publish")
+	.map { it.toBoolean() }.orElse(false).get()
+
+tasks.named<BootBuildImage>("bootBuildImage") {
+	imageName.set(backendBaseImageName)
+	imagePlatform.set("linux/arm64")
+	publish.set(false)
+	finalizedBy("bakeBackendImage")
+}
+
+// Stage the docker build context: the checked-in Dockerfile next to the
+// freshly-resolved agent jar. Using Sync (not Copy) clears stale files from
+// previous runs — important so a `docker build` does not pick up a jar from
+// an earlier agent version after a libs.versions.toml bump. The `from(...)`
+// for the agent jar uses an explicit file path (NOT `from(copyOtelAgentForBootJar)`,
+// which would pull the entire `build/libs/` directory — including bootJar's
+// output — and trigger Gradle's implicit-dependency validation).
+val backendBakeAgentJar: Provider<RegularFile> =
+	layout.buildDirectory.file("libs/opentelemetry-javaagent.jar")
+val prepareBackendBakeContext by tasks.registering(Sync::class) {
+	dependsOn(copyOtelAgentForBootJar)
+	from("docker/agent")
+	from(backendBakeAgentJar)
+	into(layout.buildDirectory.dir("docker-bake/agent"))
+}
+
+val bakeBackendImage by tasks.registering(Exec::class) {
+	dependsOn(prepareBackendBakeContext)
+	workingDir(layout.buildDirectory.dir("docker-bake/agent"))
+	val baseImage = backendBaseImageName.get()
+	val finalImage = backendImageName.get()
+	val pushTag = backendPushTag.get()
+	// Two `-t` flags so the same content carries both the manifest-facing
+	// tag (registry.local:5000/...) and the host-push-facing tag
+	// (127.0.0.1:5000/...). When they happen to be equal — e.g. a Hetzner
+	// override using ghcr.io — Docker silently dedupes.
+	commandLine(
+		"docker", "build",
+		"--platform", "linux/arm64",
+		"--build-arg", "BASE_IMAGE=$baseImage",
+		"-t", finalImage,
+		"-t", pushTag,
+		"."
+	)
+}
+
+val pushBackendImage by tasks.registering(Exec::class) {
+	val pushTag = backendPushTag.get()
+	commandLine("docker", "push", pushTag)
+	doLast {
+		logger.lifecycle("Pushed backend image: $pushTag")
+	}
+}
+
+if (publishBackendImage) {
+	bakeBackendImage.configure { finalizedBy(pushBackendImage) }
 }
 
 spotless {

@@ -22,6 +22,43 @@
 #   - Re-size primary.resources.requests/limits to the CAX21
 #     envelope (4 vCPU shared, 8 GiB RAM minus k3s overhead).
 #
+# Slice 15 (add-local-k3s-backend) — the next slice
+# (add-hetzner-deploy) will plug the backend pieces in here:
+#
+#   - Strategic-merge patch on the backend Deployment swapping the
+#     image reference from `registry.local:5000/backend:dev` (local
+#     overlay's floating tag) to a digest-pinned production tag
+#     served from ghcr.io, e.g.
+#     `ghcr.io/<owner>/backend@sha256:<digest>`. The local registry
+#     and its `registries.yaml` mirror do not exist on the Hetzner
+#     box; pulls come from ghcr.io directly.
+#   - `imagePullSecrets: [{ name: ghcr-pull }]` on the Deployment's
+#     pod spec, populated from a Secret created out-of-band via the
+#     Hetzner slice's bootstrap script (a Personal Access Token /
+#     fine-grained GitHub token with `read:packages` only). The
+#     Secret intentionally does NOT ship in this repo.
+#   - Tighter probe timings: `startupProbe.failureThreshold` lower
+#     (the CAX21 cold start is faster than a busy laptop), `livenessProbe.timeoutSeconds`
+#     explicit at 2s, `readinessProbe.periodSeconds` perhaps 10s for
+#     reduced load on the apiserver. Final numbers measured on the
+#     real box, not guessed here.
+#   - Production resource caps: requests `cpu: 500m / memory: 1Gi`,
+#     limits `cpu: 2000m / memory: 2Gi` — fills more of the CAX21
+#     envelope than the local overlay's tighter defaults. The exact
+#     numbers will be tuned against observed steady-state usage; the
+#     base manifest's defaults are kept conservative so a Hetzner
+#     misconfiguration does not OOM by accident.
+#   - Replica count: starts at 1 (single-node cluster, single CAX21
+#     box). Bumps to 2 only after the cluster grows a second node or
+#     CAX21 is replaced by a larger SKU; HPA / topology constraints
+#     do not exist in this slice or the next.
+#   - OTLP endpoint override: replace `http://host.lima.internal:4318`
+#     (the local-overlay transitional target) with the production
+#     collector's address. Whether the production collector lives in
+#     k3s (in-cluster Service DNS) or off-cluster (Grafana Cloud OTLP
+#     endpoint behind an API token) is the next slice's open
+#     question. Either way the override lives here, not in base.
+#
 # Apply path is intentionally NOT wired into the justfile until the
 # Hetzner slice lands. `just k8s-apply` targets overlays/local only.
 apiVersion: kustomize.config.k8s.io/v1beta1

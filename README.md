@@ -70,6 +70,12 @@ but slower).
 | `just k8s-diff`        | Show the cluster-vs-manifest delta.                                         |
 | `just k8s-delete`      | Tear down every rendered resource in the `social` namespace.                |
 | `just psql`            | Open `psql` against the in-cluster postgres via `localhost:5432`.           |
+| `just backend-image`   | Build + push the backend image to the local OCI registry.                   |
+| `just backend-apply`   | Apply the local overlay; block on backend rollout.                          |
+| `just backend-rebuild` | One-shot: `backend-image` then `backend-apply` (95% path).                  |
+| `just backend-forward` | `kubectl port-forward svc/backend 18080:8080`.                              |
+| `just backend-logs`    | Tail pod logs (`kubectl logs -f`).                                          |
+| `just backend-delete`  | Tear down only the backend (label-scoped).                                  |
 | `just db-forward-hetzner` | Placeholder; landed by the next slice.                                   |
 
 ### Dev loop
@@ -103,10 +109,69 @@ kubectl config use-context lima-social
 The apiserver is forwarded to host `:16443` (not `:6443`) so it does not
 collide with Docker Desktop's bundled Kubernetes if you have that enabled.
 
+### Run the backend in cluster (optional)
+
+Slice `add-local-k3s-backend` adds a **side-channel** path for running the
+backend inside the local k3s cluster as a Deployment. This is purely opt-in:
+the canonical dev loop is still `./gradlew :backend:bootRun` against
+`localhost:5432`. The e2e harness still spawns the host JVM. IDE run
+configurations are unchanged. Nothing in CI exercises the k3s deploy.
+
+The four-recipe flow:
+
+```sh
+just backend-image     # build + push: `./gradlew bootBuildImage -Ppublish=true`
+just backend-apply     # apply local overlay, block on rollout-status
+just backend-forward   # port-forward svc/backend 18080:8080 (separate terminal)
+just backend-logs      # tail pod logs (separate terminal)
+```
+
+`just backend-rebuild` chains `backend-image` + `backend-apply` for the 95%
+iteration path. `just backend-delete` tears down Deployment + Service by the
+`app.kubernetes.io/name=backend` label (postgres and registry untouched).
+
+**Registry hostname asymmetry — by design.** Three names refer to the same
+local OCI registry, each chosen for the side that uses it:
+
+- **`127.0.0.1:5000`** — what `docker push` targets from the macOS host.
+  Plain `localhost:5000` would resolve to `::1` first on macOS, and AirPlay
+  Receiver squats on `::1:5000` with a 403, so the IPv4 form is the safe
+  choice. The Gradle bake step retags the buildpack output as
+  `127.0.0.1:5000/backend:dev` for the push.
+- **`registry.local:5000`** — the hostname pods reference in their `image:`
+  field. It does NOT resolve on the macOS host (deliberately); it only ever
+  appears in pod manifests, where k3s' containerd reads
+  `/etc/rancher/k3s/registries.yaml` and finds a mirror entry rewriting it.
+- **`host.lima.internal:5000`** — the actual VM-routed address. The
+  `registries.yaml` `mirrors:` block rewrites `registry.local:5000` → 
+  `http://host.lima.internal:5000` (Lima's host-resolver alias, verified to
+  resolve from a pod). This is also marked `insecure_skip_verify: true`
+  because the local registry is HTTP-only and unauthenticated.
+
+The asymmetry is documented because it costs each reader once: after that
+the layering is obvious (push hostname, manifest hostname, in-VM hostname
+are three different concerns and using one name for all three would couple
+them).
+
+**OTLP transport — transitional choice.** The OpenTelemetry collector still
+lives in `docker-compose --profile observability`. The in-cluster backend
+reaches it via `OTEL_EXPORTER_OTLP_ENDPOINT=http://host.lima.internal:4318`
+(the same VM-host alias the registry mirror uses). A future
+observability-migration slice will replace this with an in-cluster Service
+DNS name once Prometheus / Grafana / Tempo / Loki migrate too. The host
+backend's `localhost:4318` default is unchanged.
+
+The k3s backend Service is `ClusterIP` only — no Ingress, no LoadBalancer.
+The Traefik-vs-ingress-nginx decision deferred in slice 14 stays deferred;
+the slice that introduces the *frontend* in k3s (or a dedicated ingress
+slice) lands it. For now `kubectl port-forward` to `:18080` is enough — the
+deliberate non-collision with the host backend's `:8080` lets both run
+side-by-side.
+
 ### Non-goals (in this slice)
 
-- **The backend and frontend are NOT yet in k3s.** They still run on the host
-  (`./gradlew :backend:bootRun`, `pnpm dev`) and connect to `localhost:5432`.
+- **The frontend is NOT yet in k3s.** It still runs on the host (`pnpm dev`,
+  Vite preview, the Playwright harness's bundled preview server).
 - **The observability stack is NOT yet in k3s.** Prometheus, Grafana, Tempo,
   Loki, the OTel Collector, Alertmanager, the webhook sink, `postgres-exporter`,
   and cAdvisor continue to run under `docker-compose --profile observability`.

@@ -90,3 +90,54 @@ psql:
 db-forward-hetzner:
     @echo "TODO: implemented by the add-hetzner-deploy slice."
     @echo "      Will run: kubectl --context hetzner-social -n social port-forward svc/postgres 15432:5432"
+
+# === Slice 15 (add-local-k3s-backend) — backend-in-cluster verbs. ===
+#
+# Side-channel: these recipes drive the OPT-IN k3s backend loop.
+# `./gradlew :backend:bootRun` and the e2e harness still target the
+# host JVM; nothing in CI uses these. See README "Run the backend
+# in cluster (optional)" for the full flow and the registry
+# hostname asymmetry the implementation rests on.
+
+# Boot the local registry compose profile if it is not already up,
+# then build the backend image with Spring Boot's buildpacks and
+# push it to the registry. The Gradle chain (declared in
+# `backend/build.gradle.kts`) does:
+#   bootBuildImage → bakeBackendImage (adds the OTel agent layer)
+#                 → pushBackendImage (when -Ppublish=true)
+# The push tag is `127.0.0.1:5000/backend:dev` (host-resolvable);
+# the cluster pulls `registry.local:5000/backend:dev` and the k3s
+# `registries.yaml` mirror rewrites it to `host.lima.internal:5000`.
+#
+# Build the backend image and push it to the local OCI registry.
+backend-image:
+    docker compose --profile registry up -d registry
+    cd backend && ./gradlew bootBuildImage -Ppublish=true
+    @echo "Image pushed: 127.0.0.1:5000/backend:dev (cluster reference: registry.local:5000/backend:dev)"
+
+# Apply the local overlay and block on rollout-status (180s
+# absorbs JVM cold start + Flyway on a busy laptop).
+backend-apply:
+    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
+    kubectl rollout status deploy/backend -n {{PG_NAMESPACE}} --timeout=180s
+
+# Tail backend pod logs (follow).
+backend-logs:
+    kubectl logs -n {{PG_NAMESPACE}} deploy/backend -f
+
+# Port-forward the in-cluster backend Service to host :18080. The
+# 18080 choice is deliberate so this recipe does NOT collide with
+# the host `./gradlew :backend:bootRun` loop on :8080; both can run
+# side-by-side for A/B comparison. `kubectl port-forward` is a
+# long-running foreground process — open a separate terminal.
+#
+# Port-forward the in-cluster backend to host :18080.
+backend-forward:
+    kubectl port-forward -n {{PG_NAMESPACE}} svc/backend 18080:8080
+
+# Tear down backend Deployment + Service (label-scoped).
+backend-delete:
+    kubectl delete deploy,svc,cm -n {{PG_NAMESPACE}} -l app.kubernetes.io/name=backend --ignore-not-found
+
+# Rebuild the image + apply in one shot (the 95% path).
+backend-rebuild: backend-image backend-apply
