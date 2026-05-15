@@ -66,6 +66,16 @@ services:
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
+    depends_on:
+      - webhook-sink
+
+  webhook-sink:
+    build:
+      context: ./infra/observability/webhook-sink
+    container_name: social-webhook-sink
+    profiles: ["observability"]
+    ports:
+      - "8081:8080"
 
   grafana:
     image: grafana/grafana:11.2.0

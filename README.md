@@ -489,10 +489,44 @@ burn-rate alerts can't fire when the target is offline (no samples to divide).
   Alertmanager datasource. No copy-paste from Prometheus needed.
 - Raw HTTP: `curl http://localhost:9093/api/v2/alerts` for scripting.
 
-For this slice, Alertmanager is configured with a stub `null` receiver — alerts
-are accepted and visible on the surfaces above, but not forwarded anywhere.
-A real webhook receiver (PagerDuty / Slack / dev sink) is deferred to the
-follow-up slice that also adds fault injection.
+**Webhook sink (local-dev receiver).** Alertmanager's stub `null` receiver
+is replaced by a real local-dev webhook sink under
+`infra/observability/webhook-sink/` — a small Node + Express container that
+records every routed firing in a bounded in-memory ring. Severity-based
+routing dispatches each alert to one of two endpoints:
+
+- `severity=page` → `POST http://webhook-sink:8080/page` (page-webhook receiver).
+- `severity=ticket` → `POST http://webhook-sink:8080/ticket` (ticket-webhook receiver).
+
+Inspect what the sink has received:
+
+```sh
+curl http://localhost:8081/received | jq
+docker compose logs webhook-sink
+```
+
+The sink also exposes `GET /healthz` (used by the e2e spec's readiness
+probe) and accepts `?after=<unix-millis>` on `/received` to filter the
+ring to payloads received after a given timestamp.
+
+A real production receiver (PagerDuty / Opsgenie / Slack) is a one-line
+config swap in `alertmanager.yml` — replace the webhook URL with the
+production target's incoming-webhook URL and the rest of the routing
+tree stays as-is.
+
+**Runbook annotations.** Every alert in the rule files carries a
+`runbook_url` annotation pointing at a Markdown stub under
+`infra/observability/runbooks/`. The stubs are intentionally minimal —
+each has `Symptoms` / `Impact` / `Triage` / `Mitigation` / `Escalation`
+sections seeded with the basics, and real incident learnings are
+expected to fill them in over time. The contract is "every alert has a
+runbook"; the content matures as the team operates the service.
+
+**Inhibition.** `BackendDown` firing suppresses every alert carrying any
+`slo` label (Alertmanager `inhibit_rules:` block in `alertmanager.yml`).
+When the backend is down, burn-rate ratios can't produce meaningful
+values and the operator already knows the root cause — inhibition keeps
+the page noise-free.
 
 **Run the alerting-rule unit tests locally** with `promtool test rules`:
 

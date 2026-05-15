@@ -15,9 +15,12 @@
 #   slo      = api_availability | feed_read_latency | post_create_latency
 # (BackendDown is operational, not budget-based — it has severity but no slo.)
 #
-# Annotations are kept to a single `summary:` line per alert so the promtool
-# fixture stays compact; richer descriptions can be layered in alongside a
-# real webhook receiver in a follow-up slice.
+# Annotations on every alert:
+#   - summary    : one-line human-readable description.
+#   - runbook_url: GitHub blob link to the matching Markdown stub under
+#                  `infra/observability/runbooks/<AlertName>.md`. The stub
+#                  must exist; the e2e spec asserts the annotation is
+#                  preserved through Alertmanager's routing.
 groups:
   - name: slo_api_availability_burn
     rules:
@@ -32,6 +35,7 @@ groups:
           slo: api_availability
         annotations:
           summary: "API availability burning 30d budget very fast (fast-burn)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityFastBurn.md"
 
       - alert: ApiAvailabilitySlowBurn
         expr: |
@@ -44,6 +48,7 @@ groups:
           slo: api_availability
         annotations:
           summary: "API availability burning 30d budget fast (slow-burn page)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilitySlowBurn.md"
 
       - alert: ApiAvailabilityBudgetBurn
         expr: |
@@ -56,6 +61,7 @@ groups:
           slo: api_availability
         annotations:
           summary: "API availability burning 30d budget steadily (ticket)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityBudgetBurn.md"
 
   - name: slo_feed_read_latency_burn
     rules:
@@ -70,6 +76,7 @@ groups:
           slo: feed_read_latency
         annotations:
           summary: "Feed-read latency burning 30d budget very fast (fast-burn)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/FeedReadLatencyFastBurn.md"
 
       - alert: FeedReadLatencySlowBurn
         expr: |
@@ -82,6 +89,7 @@ groups:
           slo: feed_read_latency
         annotations:
           summary: "Feed-read latency burning 30d budget fast (slow-burn page)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/FeedReadLatencySlowBurn.md"
 
   - name: slo_post_create_latency_burn
     rules:
@@ -96,6 +104,7 @@ groups:
           slo: post_create_latency
         annotations:
           summary: "Post-create latency burning 30d budget very fast (fast-burn)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostCreateLatencyFastBurn.md"
 
       - alert: PostCreateLatencySlowBurn
         expr: |
@@ -108,6 +117,7 @@ groups:
           slo: post_create_latency
         annotations:
           summary: "Post-create latency burning 30d budget fast (slow-burn page)."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostCreateLatencySlowBurn.md"
 
   - name: backend_liveness
     rules:
@@ -121,3 +131,4 @@ groups:
           severity: page
         annotations:
           summary: "Backend scrape target is down."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/BackendDown.md"
