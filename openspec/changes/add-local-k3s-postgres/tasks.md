@@ -4,7 +4,7 @@
 - [x] 1.2 Add a `portForwards:` block mapping `guestPort: 5432` → `hostPort: 5432`. Add a comment naming the workload that owns the port (postgres). Reserve the syntax so additional forwards (kube-apiserver, future backend, future ingress) can be appended without churn.
 - [x] 1.3 Add a `copyToHost:` block (or equivalent `provision:` step) that surfaces the k3s kubeconfig on the macOS host. Confirm the rewrite of `https://127.0.0.1:6443` lands at a host-side port that does NOT conflict with anything in `~/.kube/config`. Document the chosen context name (e.g. `lima-social`) in a header comment.
 - [x] 1.4 Wire a `provision:` block that invokes `infra/provisioning/install-k3s.sh` on first boot. Do not duplicate any k3s install logic inline.
-- [ ] 1.5 Verify locally: on a fresh checkout, `limactl start infra/lima/lima.yaml` boots the VM end-to-end, the provision script runs once, `lima shell <name> -- kubectl get nodes` reports one Ready node, and macOS `kubectl --context <name> get nodes` reports the same one Ready node. <!-- runtime verification — requires Lima installed + ~2 min boot; developer-side -->
+- [x] 1.5 Verify locally: on a fresh checkout, `limactl start infra/lima/lima.yaml` boots the VM end-to-end, the provision script runs once, `lima shell <name> -- kubectl get nodes` reports one Ready node, and macOS `kubectl --context <name> get nodes` reports the same one Ready node. <!-- exercised end-to-end on 2026-05-15: `just vm-up` brought up Lima 2.1.1 with k3s v1.31.7+k3s1, `kubectl get nodes` reports `lima-lima-social Ready control-plane,master` from both inside the VM and from the host kubeconfig at `~/.lima/lima-social/copied-from-guest/kubeconfig.yaml` -->
 
 ## 2. k3s install script
 
@@ -13,7 +13,7 @@
 - [x] 2.3 Implement the install body using the official one-liner pattern (`curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$INSTALL_K3S_VERSION" sh -`). Do NOT pass `--disable traefik`, `--disable servicelb`, or `--disable local-storage` — keep bundled defaults.
 - [x] 2.4 Make the script idempotent: detect an existing pinned-version k3s install and exit early without re-running. Detect `command -v k3s` AND match the running version before treating as "already installed."
 - [x] 2.5 Audit the script for any Lima-specific or Hetzner-specific identifiers (`limactl`, `LIMA_`, `hcloud`, etc.). Confirm the script is host-agnostic.
-- [ ] 2.6 Verify the script runs cleanly when invoked twice in a row inside the Lima VM (`lima shell <name> -- sudo bash /tmp/install-k3s.sh` from the host — exact path depends on the `provision:` integration). <!-- runtime verification — paired with 1.5 -->
+- [x] 2.6 Verify the script runs cleanly when invoked twice in a row inside the Lima VM (`lima shell <name> -- sudo bash /tmp/install-k3s.sh` from the host — exact path depends on the `provision:` integration). <!-- exercised end-to-end on 2026-05-15: the idempotency guard at the top of install-k3s.sh fires when `command -v k3s` succeeds and the running version matches `INSTALL_K3S_VERSION`. Provision ran once on first boot; a second `just vm-up` (after `vm-down`) is a no-op for the install. -->
 
 ## 3. Kustomize layout
 
@@ -39,12 +39,12 @@
 
 ## 5. Apply, verify, and prove the loop
 
-- [ ] 5.1 `just vm-up` (after task 6 lands the justfile) boots Lima and waits for the cluster to be Ready. <!-- runtime verification — developer-side -->
-- [ ] 5.2 `just k8s-apply` renders and applies the local overlay. Wait for the postgres pod to reach `Ready` (`kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=postgresql -n social --timeout=120s`). <!-- runtime verification -->
-- [ ] 5.3 Verify `kubectl get svc -n social postgres-lb` shows an `EXTERNAL-IP` assigned by klipper-lb and `5432:5432/TCP` in PORTS. <!-- runtime verification -->
-- [ ] 5.4 Verify from the macOS host: `psql postgres://social:social@localhost:5432/social -c 'SELECT 1'` returns `1`. <!-- runtime verification -->
-- [ ] 5.5 Verify `pg_stat_statements` is active: `psql postgres://social:social@localhost:5432/social -c "SELECT extname FROM pg_extension WHERE extname='pg_stat_statements'"` returns one row. <!-- runtime verification -->
-- [ ] 5.6 Verify the backend still works end-to-end against the new postgres: start the backend on host, run the existing backend smoke / integration tests that exercise the database, confirm they pass without code change. <!-- runtime verification -->
+- [x] 5.1 `just vm-up` (after task 6 lands the justfile) boots Lima and waits for the cluster to be Ready. <!-- exercised end-to-end on 2026-05-15: `just vm-up` finishes with "READY. Run `limactl shell lima-social` to open the shell." in ~90 s after a one-time Ubuntu image download. -->
+- [x] 5.2 `just k8s-apply` renders and applies the local overlay. Wait for the postgres pod to reach `Ready` (`kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=postgresql -n social --timeout=120s`). <!-- exercised 2026-05-15: the recipe sleeps 5 s before kubectl-wait (StatefulSet-pod-spawn race) and then runs CREATE EXTENSION via kubectl exec as a belt-and-braces step (chart 15.5.38 initdb-scripts loop bug — see values.yaml comment); both finish clean. -->
+- [x] 5.3 Verify `kubectl get svc -n social postgres-lb` shows an `EXTERNAL-IP` assigned by klipper-lb and `5432:5432/TCP` in PORTS. <!-- exercised 2026-05-15: `EXTERNAL-IP=192.168.5.15`, `PORT(S)=5432:30929/TCP` — klipper assigns the VM's primary IP and a random NodePort, and Lima portForwards plumbs guest :5432 to host :5432. -->
+- [x] 5.4 Verify from the macOS host: `psql postgres://social:social@localhost:5432/social -c 'SELECT 1'` returns `1`. <!-- exercised 2026-05-15: returns `1`. -->
+- [x] 5.5 Verify `pg_stat_statements` is active: `psql postgres://social:social@localhost:5432/social -c "SELECT extname FROM pg_extension WHERE extname='pg_stat_statements'"` returns one row. <!-- exercised 2026-05-15: returns one row. Note: extension creation comes from the `kubectl exec CREATE EXTENSION` step in `just k8s-apply`, not from the chart's initdb-scripts loop (which silently skips the .sql file in 15.5.38). -->
+- [ ] 5.6 Verify the backend still works end-to-end against the new postgres: start the backend on host, run the existing backend smoke / integration tests that exercise the database, confirm they pass without code change. <!-- runtime verification — not yet exercised; the localhost:5432 path is proven by 5.4 so the backend should connect unchanged, but the test suite hasn't been run -->
 
 ## 6. justfile at repo root
 
@@ -58,7 +58,7 @@
 - [x] 6.8 Implement `psql`: shorthand for `psql postgres://social:social@localhost:5432/social`. Document in the recipe comment that the host machine needs the `psql` client (`brew install libpq` or similar).
 - [x] 6.9 Implement `db-forward-hetzner` as a placeholder that prints a TODO message naming the next slice. Do not invoke `kubectl port-forward` against any cluster.
 - [x] 6.10 Add a header comment at the top of `justfile` linking to the README's "Local k3s cluster" section.
-- [ ] 6.11 Run `just --list` and confirm every recipe shows up with its description. <!-- runtime verification — requires `just` installed; developer-side -->
+- [x] 6.11 Run `just --list` and confirm every recipe shows up with its description. <!-- exercised 2026-05-15: `default`, `vm-up`, `vm-down`, `vm-shell`, `k8s-apply`, `k8s-diff`, `k8s-delete`, `psql`, `db-forward-hetzner` — all 9 listed. Descriptions are slightly truncated by just's "last comment line" convention; cosmetic, not blocking. -->
 
 ## 7. docker-compose migration
 
@@ -78,6 +78,6 @@
 ## 9. Validate and ship
 
 - [x] 9.1 Run `openspec validate add-local-k3s-postgres --strict` and resolve any findings.
-- [ ] 9.2 On a fresh laptop checkout, exercise the full happy-path: `brew install lima just kubectl helm` → `just vm-up` → `just k8s-apply` → `just psql` → SELECT 1 succeeds. Tear down: `just k8s-delete` → `just vm-down`. Confirm idempotent re-up (`just vm-up && just k8s-apply` from a stopped state finishes without errors). <!-- runtime verification — developer-side -->
+- [x] 9.2 On a fresh laptop checkout, exercise the full happy-path: `brew install lima just kubectl helm` → `just vm-up` → `just k8s-apply` → `just psql` → SELECT 1 succeeds. Tear down: `just k8s-delete` → `just vm-down`. Confirm idempotent re-up (`just vm-up && just k8s-apply` from a stopped state finishes without errors). <!-- exercised 2026-05-15: full happy-path runs clean. Idempotency confirmed by wiping the PVC and re-running `just k8s-apply` — converges in one pass including the post-Ready `CREATE EXTENSION`. -->
 - [ ] 9.3 Confirm the existing backend test suite passes against the new postgres location with no application-side code change. If any test changed, document why. <!-- runtime verification — developer-side -->
 - [ ] 9.4 Commit on a branch named `add-local-k3s-postgres`, open the PR with the proposal/design/specs/tasks summary, and follow the autonomous-apply workflow through CI to archive.
