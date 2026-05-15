@@ -55,6 +55,15 @@ k8s-apply:
     @sleep 5
     kubectl wait --for=condition=Ready pod -l {{PG_LABEL}} -n {{PG_NAMESPACE}} --timeout=180s
     kubectl exec -n {{PG_NAMESPACE}} postgres-postgresql-0 -- bash -c 'PGPASSWORD="$POSTGRES_POSTGRES_PASSWORD" psql -U postgres -d social -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"'
+    # Grant `pg_read_all_stats` to the `social` role so the in-compose
+    # `postgres-exporter` (running as `social`) can read every
+    # `pg_stat_statements` row's `queryid`. Without it, rows the
+    # non-superuser can't see collapse to `queryid=""` and the
+    # exporter emits duplicate label sets → /metrics returns errors.
+    # The old `postgres:16-alpine` compose image created `social` as
+    # superuser by default; Bitnami's chart creates it as a plain
+    # user, so the grant is the bridge. Idempotent.
+    kubectl exec -n {{PG_NAMESPACE}} postgres-postgresql-0 -- bash -c 'PGPASSWORD="$POSTGRES_POSTGRES_PASSWORD" psql -U postgres -d social -c "GRANT pg_read_all_stats TO social"'
 
 # Show the cluster-vs-manifest delta. `kubectl diff` exits non-zero
 # when changes are present (by design); the leading `-` tells just
