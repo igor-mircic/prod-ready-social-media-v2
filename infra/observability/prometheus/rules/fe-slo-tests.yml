@@ -49,6 +49,7 @@ tests:
               service: frontend
             exp_annotations:
               summary: "LCP burning 30d budget very fast (fast-burn)."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/LcpSloFastBurn.md"
 
   # ---------------------------------------------------------------------------
   # 2. LcpSloSlowBurn — every LCP sample slow over 6h+.
@@ -69,6 +70,7 @@ tests:
               service: frontend
             exp_annotations:
               summary: "LCP burning 30d budget fast (slow-burn page)."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/LcpSloSlowBurn.md"
 
   # ---------------------------------------------------------------------------
   # 3. InpSloFastBurn — every INP sample slower than 200ms.
@@ -89,6 +91,7 @@ tests:
               service: frontend
             exp_annotations:
               summary: "INP burning 30d budget very fast (fast-burn)."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/InpSloFastBurn.md"
 
   # ---------------------------------------------------------------------------
   # 4. InpSloSlowBurn — every INP sample slow over 6h+.
@@ -109,6 +112,7 @@ tests:
               service: frontend
             exp_annotations:
               summary: "INP burning 30d budget fast (slow-burn page)."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/InpSloSlowBurn.md"
 
   # ---------------------------------------------------------------------------
   # 5. Steady-state: 24h where every LCP and INP sample is fast (in the

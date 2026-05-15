@@ -1,0 +1,13 @@
+{
+  "name": "webhook-sink",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local-dev Alertmanager webhook sink for the observability profile.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.21.1"
+  }
+}

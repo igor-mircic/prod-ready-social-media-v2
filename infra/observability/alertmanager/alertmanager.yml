@@ -1,19 +1,57 @@
 # Alertmanager configuration for the local-dev observability stack.
 #
-# Stub configuration: the top-level `route:` points at the built-in `null`
-# receiver — alerts received from Prometheus are accepted (and visible via
-# the v2 HTTP API + Grafana's Alerting nav) but not forwarded anywhere.
-# A real webhook receiver (PagerDuty / Slack / dev sink) is explicitly
-# deferred to a follow-up slice that also adds fault injection.
+# Routing tree (severity-keyed): every firing carries a `severity` label
+# pinned by the rule files. The top-level `route:` block dispatches
+#   severity="page"   → page-webhook   (POST http://webhook-sink:8080/page)
+#   severity="ticket" → ticket-webhook (POST http://webhook-sink:8080/ticket)
+# Anything unlabelled lands on the `default` receiver, which is intentionally
+# empty (Alertmanager requires the top-level route to name a receiver, but
+# no alert in the rule files lacks a severity label today).
 #
-# Alertmanager UI:    http://localhost:9093
-# v2 HTTP API:        http://localhost:9093/api/v2/alerts
+# Inhibition: while `BackendDown` is firing, every alert carrying any `slo`
+# label is suppressed (`equal: []` so the BackendDown anywhere inhibits all
+# SLO alerts anywhere — this slice has a single backend target).
+#
+# Webhook receivers carry `send_resolved: true` so the sink observes the
+# full firing → resolved state machine.
+#
+# Surfaces:
+#   Alertmanager UI:    http://localhost:9093
+#   v2 HTTP API:        http://localhost:9093/api/v2/alerts
+#   Webhook sink:       http://localhost:8081/received
+#
+# Replaces the slice-8 stub `null` receiver; the deferred "real receiver,
+# runbooks, end-to-end alert-firing test" follow-up is realised here.
 route:
-  receiver: 'null'
+  receiver: 'default'
   group_by: ['alertname', 'slo']
   group_wait: 10s
   group_interval: 5m
   repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity="page"
+      receiver: 'page-webhook'
+      continue: false
+    - matchers:
+        - severity="ticket"
+      receiver: 'ticket-webhook'
+      continue: false
 
 receivers:
-  - name: 'null'
+  - name: 'default'
+  - name: 'page-webhook'
+    webhook_configs:
+      - url: 'http://webhook-sink:8080/page'
+        send_resolved: true
+  - name: 'ticket-webhook'
+    webhook_configs:
+      - url: 'http://webhook-sink:8080/ticket'
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="BackendDown"
+    target_matchers:
+      - slo=~".+"
+    equal: []
