@@ -1,0 +1,103 @@
+# promtool test rules — executable spec for the database alerts.
+#
+# Mirrors `slo-tests.yml` and `fe-slo-tests.yml` in shape: each stanza feeds
+# crafted synthetic series, evaluates the rule file at a simulated eval_time,
+# and asserts which alerts are (or aren't) in `firing` state with the expected
+# labels and annotations.
+#
+# Run from the repo root with:
+#
+#   docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+#     prom/prometheus:v2.55.1 test rules /rules/database-tests.yml
+#
+# Series naming notes:
+#   - The `postgres-exporter` v0.17.x build emits `pg_stat_database_*` counters
+#     WITHOUT a `_total` suffix; the fixture pins those exact names.
+#   - `pg_settings_max_connections` carries no `datname` label.
+#   - `pg_stat_database_numbackends` carries both `datid` and `datname`. The
+#     fixture only feeds `datname` because the alert uses `on()` matching to
+#     ignore label sets on the right-hand side of the ratio anyway.
+#
+# Coverage maps spec scenarios one-for-one:
+#   - PostgresConnectionSaturation : fires when ratio > 0.8 sustained 5m;
+#                                    no-fire when ratio stays < 0.8.
+#   - PostgresDeadlocks            : fires when the deadlock counter
+#                                    increments inside 5m; no-fire when it
+#                                    stays flat.
+rule_files:
+  - database-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # 1. PostgresConnectionSaturation — 90/100 backends sustained for >5m fires
+  # the alert (ratio = 0.9 > 0.8).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_database_numbackends{datname="social"}'
+        values: '90x10'
+      - series: 'pg_settings_max_connections'
+        values: '100x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: PostgresConnectionSaturation
+        exp_alerts:
+          # `on()` strips every label off the ratio, including `datname` —
+          # only the alert-defined labels survive.
+          - exp_labels:
+              severity: page
+            exp_annotations:
+              summary: "Postgres connection count > 80% of max_connections."
+              description: "Active backends on database `social` have exceeded 80% of `max_connections` for at least 5 minutes. The app will start failing to acquire connections soon; investigate before user-visible impact lands."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresConnectionSaturation.md"
+
+  # ---------------------------------------------------------------------------
+  # 2. PostgresConnectionSaturation — steady-state at 50/100 backends does NOT
+  # fire (ratio = 0.5).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_database_numbackends{datname="social"}'
+        values: '50x10'
+      - series: 'pg_settings_max_connections'
+        values: '100x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: PostgresConnectionSaturation
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # 3. PostgresDeadlocks — counter increases by 5 over the 5m window. The
+  # `increase()` expression sees > 0 → alert fires with severity=ticket.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_database_deadlocks{datname="social"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PostgresDeadlocks
+        exp_alerts:
+          - exp_labels:
+              datname: social
+              severity: ticket
+            exp_annotations:
+              summary: "Postgres recorded one or more deadlocks in the last 5 minutes."
+              description: "Database `social` recorded at least one deadlock in the last 5 minutes. Deadlocks usually self-resolve via Postgres's victim selection, but indicate a query-ordering or locking bug worth tracing."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresDeadlocks.md"
+
+  # ---------------------------------------------------------------------------
+  # 4. PostgresDeadlocks — counter is flat at zero for the whole window.
+  # `increase()` returns 0 → alert does NOT fire.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_database_deadlocks{datname="social"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: PostgresDeadlocks
+        exp_alerts: []

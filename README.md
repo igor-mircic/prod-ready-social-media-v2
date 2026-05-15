@@ -601,6 +601,90 @@ exporter does not synthesize exemplars from FE OTLP histograms in this
 slice, so the Frontend overview dashboard's panels do not yet carry the
 metric→trace pivot.
 
+### Database internals
+
+The same observability profile also brings up
+[`postgres-exporter`](https://github.com/prometheus-community/postgres_exporter)
+so the local Postgres is observable as an engine, not just as a target of
+backend-side timers (HikariCP, JDBC spans, request latency). Connection
+pressure against `max_connections`, transactions per second, cache hit
+ratio, deadlocks, and the top-N slow queries from `pg_stat_statements`
+are surfaced through Prometheus and Grafana alongside the existing
+backend / frontend dashboards:
+
+```sh
+docker-compose --profile observability up -d
+```
+
+What's wired:
+
+- The `postgres` service in `docker-compose.yml` runs with
+  `shared_preload_libraries=pg_stat_statements`, and a first-boot init
+  script (`infra/observability/postgres/init/01-pg-stat-statements.sql`)
+  creates the extension on the `social` database — so per-statement
+  counters are real signal, not placeholders.
+- A new `postgres-exporter` service (pinned `quay.io/prometheuscommunity/postgres-exporter`
+  image, port `9187`) authenticates to Postgres via `DATA_SOURCE_URI` and
+  emits the standard `pg_stat_database` / `pg_settings` / `pg_database_size_bytes`
+  series. A custom-queries projection at
+  `infra/observability/postgres-exporter/queries.yaml` adds
+  `pg_stat_statements_*` series for the top-100 statements by total
+  execution time, with the `query` text truncated to 200 characters to
+  keep label cardinality bounded.
+- Prometheus picks up the exporter as a new `postgres-exporter` scrape
+  job (`infra/observability/prometheus/prometheus.yml`); the target's
+  health is on `http://localhost:9090/targets`.
+- Grafana auto-provisions a new `Database overview` dashboard at
+  `http://localhost:3000/d/database-overview` (also reachable via
+  Dashboards → Browse → "Database overview"): connection saturation
+  gauge, connection-count time series, transactions/sec, cache hit
+  ratio, tuples affected, deadlock rate, database size, and a top-N
+  slow-query table sourced from `pg_stat_statements`.
+- Two database-tier alerts ride the slice-11 severity routing:
+  `PostgresConnectionSaturation` (`severity=page`, fires when
+  `numbackends / max_connections > 0.8` for 5 m) and `PostgresDeadlocks`
+  (`severity=ticket`, fires on any deadlock counter increment in the
+  last 5 m). Both carry the same `runbook_url` annotation contract as
+  the slice-11 alerts; stubs live at
+  `infra/observability/runbooks/PostgresConnectionSaturation.md` and
+  `…/PostgresDeadlocks.md`. No Alertmanager config change is needed —
+  the existing severity tree dispatches them to the same webhook sink.
+- The `promtool test rules` step gains
+  `infra/observability/prometheus/rules/database-tests.yml`, which
+  exercises both alerts against synthetic series and pins the exact
+  metric names emitted by the exporter (no `_total` suffix on
+  `pg_stat_database_*` counters in v0.17.x).
+
+**One-time volume rebuild for `pg_stat_statements`.** The
+`shared_preload_libraries` flag loads the library at server start, but
+the matching `CREATE EXTENSION` step only fires on a fresh data
+directory — Postgres's `/docker-entrypoint-initdb.d/` scripts run during
+`initdb`, not on every boot. If you already have a `postgres-data`
+volume from before this slice, the library is loaded but the extension
+isn't registered, so the exporter's pg_stat_statements query returns
+`ERROR: relation "pg_stat_statements" does not exist`. Two paths:
+
+```sh
+# (a) recreate the volume — fastest, loses any local dev data:
+docker compose down -v
+docker compose --profile observability up -d
+
+# (b) create the extension against the live volume — keeps local data:
+docker compose exec postgres \
+  psql -U social -d social -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements;'
+```
+
+After either path, `curl -s http://localhost:9187/metrics | grep pg_stat_statements`
+returns at least one line and the Database overview dashboard's slow-query
+table fills in after a few minutes of traffic.
+
+**Slow-query log shipping is deferred.** `pg_stat_statements` covers the
+"which statement is slow" question for now. Streaming Postgres's CSV
+log through the OTel Collector into Loki (so individual slow-query
+events become per-line log records with their bind parameters) is a
+follow-up slice; the current dashboard panels and alerts are sufficient
+for diagnosis at the local-dev scale.
+
 ## Prerequisites
 
 - Java 21

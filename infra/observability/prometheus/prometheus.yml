@@ -27,6 +27,10 @@ rule_files:
   # series emitted via the OTel Collector under `service_name="frontend"`.
   - rules/fe-slo-recording.yml
   - rules/fe-slo-alerting.yml
+  # Slice 12: database-tier infra alerts (connection saturation + deadlocks)
+  # backed by `postgres-exporter` series. Routing uses the existing
+  # `severity` tree from slice 11; no Alertmanager change needed.
+  - rules/database-alerts.yml
 
 # Slice 8: route firings to the Alertmanager container on the shared docker
 # network. The compose service name is `alertmanager`; its HTTP API is on
@@ -57,3 +61,15 @@ scrape_configs:
     static_configs:
       - targets:
           - collector:8889
+
+  # Slice 12: scrape `postgres-exporter` for Postgres-internal metrics
+  # (pg_stat_database transactions/connections, pg_settings, and the
+  # custom-queries projection of pg_stat_statements). The exporter only
+  # runs under the `observability` compose profile, so this target is
+  # `health: down` when the profile is not running — expected.
+  - job_name: postgres-exporter
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - postgres-exporter:9187

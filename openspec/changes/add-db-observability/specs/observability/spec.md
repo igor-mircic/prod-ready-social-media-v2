@@ -137,7 +137,7 @@ The repository's `database-alerts.yml` SHALL declare an alerting rule named `Pos
 #### Scenario: Alert is declared with the deadlock-rate expression
 - **WHEN** a reader inspects `database-alerts.yml`
 - **THEN** the file declares an alert named `PostgresDeadlocks`
-- **AND** the alert's `expr` is `increase(pg_stat_database_deadlocks_total{datname="social"}[5m]) > 0` (or equivalent series name if the exporter emits a different metric name; the test fixture below pins the exact name)
+- **AND** the alert's `expr` is `increase(pg_stat_database_deadlocks{datname="social"}[5m]) > 0` (the v0.17.x exporter emits `pg_stat_database_deadlocks` without a `_total` suffix; the test fixture below pins the exact name)
 - **AND** the alert has no `for:` clause (single occurrence is sufficient to file a ticket)
 
 #### Scenario: Alert carries the routing and runbook annotations
@@ -190,9 +190,9 @@ A backend integration test SHALL prove the `postgres-exporter` → metrics surfa
 
 #### Scenario: Test asserts the exporter emits the key series after real traffic
 - **WHEN** the test drives a handful of read and write queries against the test Postgres and then fetches `http://<exporter>:9187/metrics`
-- **THEN** the response body contains at least one sample of `pg_stat_database_xact_commit_total{datname="..."}`
+- **THEN** the response body contains at least one sample of `pg_stat_database_xact_commit{datname="..."}` (the exporter emits the counter without a `_total` suffix)
 - **AND** the response body contains at least one sample of a `pg_stat_database_numbackends` series
-- **AND** the response body contains at least one sample of a series projected from `pg_stat_statements` by the custom-queries file (e.g. `pg_stat_statements_calls_total` or the equivalent name declared in `queries.yaml`)
+- **AND** the response body contains at least one sample of a series projected from `pg_stat_statements` by the custom-queries file (e.g. `pg_stat_statements_calls` or the equivalent name declared in `queries.yaml`)
 
 ### Requirement: README documents the local database-observability run loop
 

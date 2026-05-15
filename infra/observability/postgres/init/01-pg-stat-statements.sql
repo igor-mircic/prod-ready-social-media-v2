@@ -1,0 +1,15 @@
+-- Bootstrap the pg_stat_statements extension on a fresh Postgres data
+-- directory. Mounted into the official postgres image at
+-- /docker-entrypoint-initdb.d/01-pg-stat-statements.sql, so it runs on
+-- first boot only — an existing `postgres-data` volume will skip this
+-- entirely. The server-side `shared_preload_libraries` flag (set in
+-- docker-compose.yml as a `command:` override) loads the underlying
+-- library; this script promotes that library into queryable views by
+-- creating the extension in the application database.
+--
+-- If you already have a local volume from before this slice, either
+-- `docker compose down -v && docker compose up -d postgres` to recreate
+-- the volume, or run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`
+-- manually as a superuser against the `social` database — the library
+-- is loaded either way once the compose override is in place.
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

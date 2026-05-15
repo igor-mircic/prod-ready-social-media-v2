@@ -1,0 +1,72 @@
+# Custom queries for `postgres-exporter` (`--extend.query-path` /
+# `PG_EXPORTER_EXTEND_QUERY_PATH`). Projects a curated subset of
+# `pg_stat_statements` columns into Prometheus series.
+#
+# Cardinality budget — read before adding a metric here:
+#
+#   series count = (#metric columns) × (#rows returned)
+#
+# `pg_stat_statements` returns one row per (queryid, dbid, userid). Projecting
+# the whole view would emit thousands of series per scrape and explode label
+# cardinality (each unique normalised query string is its own label value).
+# This file deliberately bounds both dimensions:
+#
+#   * SQL `LIMIT 100` ORDER BY total_exec_time DESC — only the top-100
+#     time-consuming statements are surfaced. The slow-query dashboard panel
+#     and any future "top-N" query mainly want this subset anyway.
+#   * `query` text truncated to 200 chars — a fingerprint, not the full SQL.
+#     Long auto-generated statements (Hibernate's IN-list fan-outs, JSONB
+#     literals) would otherwise produce kilobyte-sized label values.
+#
+# When extending this file:
+#   - new metric columns multiply the series count; add a comment justifying
+#     the cost.
+#   - new label columns multiply cardinality only if they vary independently
+#     of `queryid`; prefer leaning on `queryid` as the discriminator.
+#
+# Metric naming: with `--extend.query-path`, the emitted Prometheus name is
+# `<top-level-key>_<column-name>` — so `calls` becomes `pg_stat_statements_calls`,
+# etc. The `master: true` flag tells the exporter to run this query once per
+# scrape against the primary server connection (no per-database fan-out).
+pg_stat_statements:
+  query: |
+    SELECT
+      pss.queryid::text AS queryid,
+      pg_get_userbyid(pss.userid) AS user,
+      pd.datname AS datname,
+      LEFT(pss.query, 200) AS query,
+      pss.calls AS calls,
+      pss.total_exec_time AS total_exec_time,
+      pss.mean_exec_time AS mean_exec_time,
+      pss.rows AS rows
+    FROM pg_stat_statements pss
+    JOIN pg_database pd ON pd.oid = pss.dbid
+    ORDER BY pss.total_exec_time DESC
+    LIMIT 100
+  master: true
+  cache_seconds: 30
+  metrics:
+    - queryid:
+        usage: "LABEL"
+        description: "pg_stat_statements queryid (stable identifier for normalised query)"
+    - user:
+        usage: "LABEL"
+        description: "Database role that executed the statement"
+    - datname:
+        usage: "LABEL"
+        description: "Database the statement was executed against"
+    - query:
+        usage: "LABEL"
+        description: "Normalised query text, truncated to 200 chars"
+    - calls:
+        usage: "COUNTER"
+        description: "Number of times the statement was executed"
+    - total_exec_time:
+        usage: "COUNTER"
+        description: "Total time spent executing the statement, in milliseconds"
+    - mean_exec_time:
+        usage: "GAUGE"
+        description: "Mean time per execution, in milliseconds"
+    - rows:
+        usage: "COUNTER"
+        description: "Total number of rows retrieved or affected by the statement"

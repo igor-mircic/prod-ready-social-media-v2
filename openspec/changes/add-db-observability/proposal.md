@@ -9,11 +9,11 @@ The observability arc has covered every layer that lives *inside* the JVM and th
 - New `infra/observability/grafana/dashboards/database-overview.json` (sibling of `backend-overview` and `frontend-overview`) — connection count vs. `max_connections`, transactions/sec (commit + rollback), cache hit ratio, tuples affected, deadlock rate, database size, top-N slow queries from `pg_stat_statements`. Picked up automatically by existing dashboards provisioner (no provisioning YAML change).
 - New `infra/observability/prometheus/rules/database-alerts.yml`, loaded by the existing rule-files glob — two backend-tier infra alerts:
   - `PostgresConnectionSaturation` — `pg_stat_database_numbackends{datname="social"} / on() pg_settings_max_connections > 0.8` for 5m, severity `page`.
-  - `PostgresDeadlocks` — `increase(pg_stat_database_deadlocks_total{datname="social"}[5m]) > 0`, severity `ticket`.
+  - `PostgresDeadlocks` — `increase(pg_stat_database_deadlocks{datname="social"}[5m]) > 0` (the v0.17.x exporter emits the counter without a `_total` suffix), severity `ticket`.
   Both carry `runbook_url` annotations pointing at new stubs under `infra/observability/runbooks/`. Routing uses the existing severity tree from slice 11; no Alertmanager change needed.
 - New runbook stubs: `infra/observability/runbooks/PostgresConnectionSaturation.md`, `infra/observability/runbooks/PostgresDeadlocks.md` — follow the existing Symptoms / Impact / Triage / Mitigation / Escalation shape.
 - Update `promtool` test rules with a new `infra/observability/prometheus/rules/database-tests.yml` exercising both new alerts against synthetic series and asserting their `runbook_url` annotations.
-- Integration test in the backend proves the exporter surface end-to-end in-process: bootstraps the testcontainers Postgres with the extension preloaded, drives some traffic, asserts that `postgres-exporter`'s `/metrics` (run as a sibling container) emits both `pg_stat_database_xact_commit_total{datname="social"}` and `pg_stat_statements_*` series.
+- Integration test in the backend proves the exporter surface end-to-end in-process: bootstraps the testcontainers Postgres with the extension preloaded, drives some traffic, asserts that `postgres-exporter`'s `/metrics` (run as a sibling container) emits both `pg_stat_database_xact_commit{datname="..."}` and `pg_stat_statements_*` series.
 - README updates: the local observability run loop section gains a "Database internals" subsection (what the exporter shows, how to view the dashboard, the volume-rebuild note for first-time enablement of `pg_stat_statements`).
 
 Explicit non-goals (called out so reviewers know the boundary):
