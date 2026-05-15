@@ -1,0 +1,22 @@
+# Base Kustomize entry point for every workload the project runs in
+# k3s. Convention:
+#
+#   - Single namespace (`social`) — declared here as both a
+#     Namespace resource (so `kubectl apply` creates it) and as a
+#     `namespace:` directive (so every nested resource is mutated
+#     into it automatically).
+#   - Per-component manifests nest under base/<component>/ as their
+#     own Kustomize directories. They are listed below under
+#     `resources:`; new components are added by creating a new
+#     subdirectory and appending a `./<component>` entry here.
+#   - Overlays under infra/k8s/overlays/{local,hetzner} reference
+#     this base via `../../base` and apply environment-specific
+#     patches without forking the per-component shapes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: social
+
+resources:
+- ./namespace.yaml
+- ./postgres

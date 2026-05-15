@@ -19,17 +19,120 @@ never contains empty placeholder folders.
 
 ## Local development
 
-A single `docker-compose.yml` at the repo root brings up the dependencies (currently Postgres)
-that any component needs locally. The backend, future frontend dev tooling, and future e2e all
-point at this same file.
+The backend's dev loop talks to Postgres on `localhost:5432`. As of slice
+`add-local-k3s-postgres`, that Postgres runs inside a local single-node
+[k3s](https://k3s.io/) cluster hosted in a [Lima](https://lima-vm.io/) VM
+(see [Local k3s cluster](#local-k3s-cluster) below). The opt-in
+observability stack still ships via `docker-compose`.
 
 ```sh
-docker-compose up -d postgres
+# One-time: install the host-side tools (see Local k3s cluster below).
+brew install lima just kubectl helm libpq
+
+# Bring up the local cluster + apply the postgres workload.
+just vm-up
+just k8s-apply
 ```
 
 See `backend/README.md` for backend-specific run and test instructions,
 `frontend/README.md` for the frontend dev loop, and `e2e/README.md` for the
 Playwright end-to-end harness.
+
+## Local k3s cluster
+
+Postgres has moved from `docker-compose` into a single-node k3s cluster
+running inside a Lima VM whose shape (4 vCPU, 8 GiB RAM, arm64, Ubuntu 24.04)
+matches the project's eventual Hetzner CAX21 deploy target 1:1. The same
+provision script that installs k3s in the Lima VM will install k3s on
+Hetzner; the same Kustomize manifests will deploy the same workloads. The
+laptop cluster is the dev cluster, not a play-area.
+
+### Prerequisites
+
+```sh
+brew install lima just kubectl helm libpq
+```
+
+`libpq` provides the host-side `psql` client `just psql` uses; follow brew's
+PATH hint after install (or install the full `postgresql` formula instead).
+Lima starts containerd-shaped Linux VMs on macOS; on Apple Silicon the arm64
+VM runs natively, on Intel Macs Lima falls back to QEMU emulation (functional
+but slower).
+
+### Verb surface
+
+| Recipe                 | What it does                                                                |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `just vm-up`           | Boot the Lima VM (first boot installs k3s). Idempotent.                     |
+| `just vm-down`         | Stop the VM. On-disk state preserved.                                       |
+| `just vm-shell`        | Open an interactive shell inside the VM.                                    |
+| `just k8s-apply`       | Render `infra/k8s/overlays/local` and apply. Waits for postgres pod Ready.  |
+| `just k8s-diff`        | Show the cluster-vs-manifest delta.                                         |
+| `just k8s-delete`      | Tear down every rendered resource in the `social` namespace.                |
+| `just psql`            | Open `psql` against the in-cluster postgres via `localhost:5432`.           |
+| `just db-forward-hetzner` | Placeholder; landed by the next slice.                                   |
+
+### Dev loop
+
+```sh
+just vm-up         # boots Lima + provisions k3s (first run only — ~2 minutes)
+just k8s-apply     # renders the local overlay + applies; blocks until pod Ready
+just psql          # connect via localhost:5432; SELECT 1 confirms the loop
+./gradlew :backend:bootRun  # backend talks to localhost:5432 unchanged
+just vm-down       # at end of day, optional
+```
+
+If Lima is down or the host has rebooted, `just vm-up` brings the VM back
+from its preserved state and `just k8s-apply` re-asserts the manifests. No
+data loss across stop/start; the postgres PVC lives on the VM's disk via
+local-path-provisioner.
+
+### Host kubeconfig
+
+The provision step writes a host-friendly kubeconfig at
+`~/.lima/lima-social/copied-from-guest/kubeconfig.yaml` with context name
+`lima-social`. Point `KUBECONFIG` at it directly, or merge it into
+`~/.kube/config`:
+
+```sh
+KUBECONFIG=~/.kube/config:~/.lima/lima-social/copied-from-guest/kubeconfig.yaml \
+  kubectl config view --flatten > ~/.kube/config.merged && mv ~/.kube/config.merged ~/.kube/config
+kubectl config use-context lima-social
+```
+
+The apiserver is forwarded to host `:16443` (not `:6443`) so it does not
+collide with Docker Desktop's bundled Kubernetes if you have that enabled.
+
+### Non-goals (in this slice)
+
+- **The backend and frontend are NOT yet in k3s.** They still run on the host
+  (`./gradlew :backend:bootRun`, `pnpm dev`) and connect to `localhost:5432`.
+- **The observability stack is NOT yet in k3s.** Prometheus, Grafana, Tempo,
+  Loki, the OTel Collector, Alertmanager, the webhook sink, `postgres-exporter`,
+  and cAdvisor continue to run under `docker-compose --profile observability`.
+- **No production-grade secrets handling.** The local Secret is committed in
+  plaintext-equivalent base64; the real-secrets decision happens in the
+  Hetzner slice.
+- **No production-grade postgres operator.** Bitnami's chart is the entry
+  point; see future spikes below.
+- **No CI job that brings up the cluster.** Dev-only for now.
+
+### Future spikes (captured here so they're not lost)
+
+- **DIY postgres as Kustomize manifests.** Replace the Bitnami chart install
+  with hand-written StatefulSet / headless Service / volumeClaimTemplate /
+  PodDisruptionBudget / Secret. Goal: internalise the k8s primitives. The
+  spike *replaces* the Bitnami install rather than running alongside it.
+- **CloudNativePG migration.** Move postgres to the CNPG operator for
+  production-grade backup-to-S3, point-in-time recovery, rolling minor-
+  version upgrades, and optional `instances: 3` HA. Sized as its own slice.
+- **Swap Traefik for ingress-nginx.** k3s ships Traefik; ingress-nginx is the
+  more commonly seen ingress in real-world clusters. The swap is one
+  provision-script flag (`--disable traefik`) plus a `helm install`. Trigger:
+  the first workload that needs an `Ingress` (likely the backend in k3s).
+- **Hetzner provisioning + Hetzner overlay.** `infra/k8s/overlays/hetzner/`
+  already exists as a placeholder; the next slice fills it in alongside the
+  Hetzner box provisioning script.
 
 ## Logging in locally
 
@@ -70,7 +173,11 @@ are the source of truth for how the SPA calls those endpoints.
 
 The backend exposes Prometheus-format metrics at `/actuator/prometheus`; an
 opt-in compose profile brings up a local Prometheus + Grafana to scrape and
-visualise them.
+visualise them. As of slice `add-local-k3s-postgres`, `postgres-exporter`'s
+`DATA_SOURCE_URI` has been retargeted from the now-deleted in-compose
+`postgres` service to `host.docker.internal:5432` — the same Lima-forwarded
+port the backend talks to. See [Local k3s cluster](#local-k3s-cluster) for
+the workload that now lives behind that port.
 
 ```sh
 docker-compose --profile observability up -d

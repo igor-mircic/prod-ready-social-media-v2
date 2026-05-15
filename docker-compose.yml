@@ -1,19 +1,29 @@
 # Local-development dependencies for the monorepo.
 #
-# Currently provides a single Postgres service consumed by the backend's default
-# Spring profile. Future components (frontend dev tooling, e2e tests, additional
-# services like Redis or Kafka) extend this same file rather than spinning up
-# their own compose stacks.
+# As of add-local-k3s-postgres (slice 14), the dev postgres lives in
+# k3s — see infra/k8s/base/postgres/ for its source of truth, and
+# README.md "Local k3s cluster" for the dev loop. Bring it up with
+# `just vm-up && just k8s-apply`. This compose file no longer
+# defines a `postgres` service; the named volume `postgres-data` is
+# retained (below) only so a `git revert` of slice 14 restores the
+# prior compose definition cleanly. Until that revert happens, the
+# volume is unmounted.
 #
-# Start with: docker-compose up -d postgres
+# What remains here: the opt-in observability stack (Prometheus +
+# Grafana + Tempo + Collector + Loki + Alertmanager + postgres-
+# exporter + cadvisor). The postgres-exporter service now scrapes
+# the in-k3s postgres via host.docker.internal:5432 (Docker
+# Desktop's host-loopback alias); every other observability
+# component is unchanged.
 #
-# Opt-in observability stack (Prometheus + Grafana + Tempo + Collector + Loki
-# + Alertmanager + postgres-exporter + cadvisor, default off):
+# Opt-in observability stack (default off):
 #   docker-compose --profile observability up -d
 #
-# Credentials below match the backend's default Spring profile in
-# backend/src/main/resources/application.yaml. Override either side via the
-# usual SPRING_DATASOURCE_* env vars when running the backend.
+# Backend credentials still match the backend's default Spring
+# profile in backend/src/main/resources/application.yaml — the
+# postgres user/password/database are the same on either side of
+# the k3s migration. Override on the backend via the usual
+# SPRING_DATASOURCE_* env vars.
 #
 # Slice 13 (container saturation): every service declares an explicit
 # `mem_limit` and `cpus` cap. Without these limits, the cAdvisor saturation
@@ -28,40 +38,6 @@
 # Swarm-shaped `deploy.resources.limits` block) so the limits take effect
 # under `docker compose up` on every supported engine version.
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: social-postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_DB: social
-      POSTGRES_USER: social
-      POSTGRES_PASSWORD: social
-    # Slice 12: load `pg_stat_statements` at server start so per-statement
-    # metrics are available to `postgres-exporter` (`observability` profile).
-    # The library ships with the official `postgres:16-alpine` image — no
-    # image rebuild needed. The companion init script
-    # `infra/observability/postgres/init/01-pg-stat-statements.sql` runs the
-    # `CREATE EXTENSION` once on a fresh data directory.
-    command:
-      - "postgres"
-      - "-c"
-      - "shared_preload_libraries=pg_stat_statements"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./infra/observability/postgres/init/01-pg-stat-statements.sql:/docker-entrypoint-initdb.d/01-pg-stat-statements.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U social -d social"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    # Slice 13: postgres runs under the default compose profile too (not
-    # just `observability`), so this limit applies whether or not the
-    # observability stack is up. Sized comfortably for local dev — the app
-    # easily fits inside 1 GiB / 2 CPU even under e2e load.
-    mem_limit: 1g
-    cpus: 2.0
-
   postgres-exporter:
     # Slice 12: surfaces Postgres internals to Prometheus — pg_stat_database
     # transactions/connections, pg_settings_max_connections, and the
@@ -76,14 +52,22 @@ services:
     ports:
       - "9187:9187"
     environment:
-      DATA_SOURCE_URI: "postgres:5432/social?sslmode=disable"
+      # Slice 14 (add-local-k3s-postgres): postgres now lives in
+      # k3s; the exporter reaches it via Docker Desktop's host-
+      # loopback alias, which forwards through Lima's :5432 port-
+      # forward to the in-cluster postgres-lb LoadBalancer Service.
+      # See infra/k8s/base/postgres/ for the workload definition.
+      DATA_SOURCE_URI: "host.docker.internal:5432/social?sslmode=disable"
       DATA_SOURCE_USER: "social"
       DATA_SOURCE_PASS: "social"
       PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yaml"
     volumes:
       - ./infra/observability/postgres-exporter/queries.yaml:/etc/postgres-exporter/queries.yaml:ro
-    depends_on:
-      - postgres
+    # Slice 14: the in-compose `postgres` service is gone, so
+    # `depends_on: postgres` would refer to a non-existent target.
+    # Liveness against the in-k3s postgres is gated by `just k8s-
+    # apply` running before `docker compose --profile observability
+    # up -d`, not by compose ordering.
     mem_limit: 128m
     cpus: 0.25
 
@@ -263,4 +247,11 @@ services:
     cpus: 0.5
 
 volumes:
+  # Slice 14 (add-local-k3s-postgres): no service mounts this
+  # volume anymore — postgres now lives in k3s and uses a PVC
+  # backed by k3s's local-path-provisioner inside the Lima VM.
+  # The declaration is retained so a `git revert` of slice 14
+  # restores the prior `postgres` service plus its bind-mount of
+  # this volume cleanly. Drop the declaration once the revert
+  # window is no longer interesting.
   postgres-data:

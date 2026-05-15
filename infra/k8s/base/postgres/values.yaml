@@ -1,0 +1,75 @@
+# Bitnami postgresql chart values for the slice's postgres workload.
+# Each block below maps 1:1 to a docker-compose-era semantic the
+# slice replaces — see infra/k8s/base/postgres/kustomization.yaml
+# for the chart pin and openspec/changes/add-local-k3s-postgres/
+# design.md (Decision 6) for why the Bitnami chart is the entry
+# point.
+
+image:
+  # Pinned 16.x tag. NOT `latest`. Re-pin alongside the chart bump.
+  tag: 16.6.0-debian-12-r2
+
+auth:
+  username: social
+  database: social
+  # Credentials live in the Secret committed under
+  # infra/k8s/base/postgres/secret.yaml (Secret name MUST match the
+  # value below). The chart's `auth.password` / `auth.postgresPassword`
+  # keys are deliberately UNSET so the chart consumes the Secret
+  # strategy instead of synthesising its own keys at install time.
+  existingSecret: postgres-credentials
+  # Tell the chart which keys inside `postgres-credentials` carry
+  # which credentials. The keys below match the data: block in
+  # secret.yaml; the values below are the chart's own defaults
+  # restated explicitly for the next reader.
+  secretKeys:
+    adminPasswordKey: postgres-password
+    userPasswordKey: password
+
+primary:
+  # Load pg_stat_statements at server start so per-statement counters
+  # are real signal for the slice-12 observability work. Mirrors the
+  # docker-compose `command: -c shared_preload_libraries=pg_stat_statements`
+  # override.
+  extendedConfiguration: |
+    shared_preload_libraries = 'pg_stat_statements'
+
+  # Promote the loaded library into queryable views on a fresh data
+  # directory. Same SQL the slice-12 init script at
+  # infra/observability/postgres/init/01-pg-stat-statements.sql
+  # contains, inlined here so the chart owns the bootstrap end-to-
+  # end. The standalone init file is left in place for slice-12
+  # audit traceability; a follow-up cleanup may remove it once
+  # nothing references it.
+  initdb:
+    scripts:
+      01-pg-stat-statements.sql: |
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+  persistence:
+    size: 5Gi
+    # k3s ships local-path-provisioner as the default StorageClass;
+    # pin it explicitly so a fresh cluster does not depend on the
+    # chart's auto-detection.
+    storageClass: local-path
+
+  # Match the docker-compose ceiling (`mem_limit: 1g`, `cpus: 2.0`)
+  # so the pod has the same resource envelope it had before this
+  # slice — and so saturation alerts (slice 13) fire from the same
+  # headroom.
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 2000m
+
+# The existing in-compose `postgres-exporter` continues to do the
+# scraping (retargeted at host.docker.internal:5432 — see
+# docker-compose.yml). The Bitnami chart's bundled metrics sidecar
+# is a clean future move once Prometheus migrates into k3s; until
+# then, enabling it here would create two exporters fighting for
+# the same postgres metric surface.
+metrics:
+  enabled: false

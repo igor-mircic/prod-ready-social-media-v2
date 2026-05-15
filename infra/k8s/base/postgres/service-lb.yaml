@@ -1,0 +1,31 @@
+# LoadBalancer Service exposing the chart's primary pod on the VM's
+# primary IP. k3s's klipper-lb assigns the EXTERNAL-IP; the Lima
+# portForwards entry (`5432 → 5432`) plumbs that to macOS localhost.
+# Net effect: any host process (backend, IDE, psql, the in-compose
+# postgres-exporter via host.docker.internal:5432) reaches the in-
+# cluster postgres at the same `localhost:5432` it used before this
+# slice.
+#
+# Selector labels match Bitnami's primary StatefulSet pod template.
+# If the chart bumps to a major release that changes the labels,
+# confirm via `kubectl get pods -n social -l app.kubernetes.io/
+# instance=postgres --show-labels` and update accordingly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-lb
+  labels:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/component: primary
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: postgresql
+    app.kubernetes.io/instance: postgres
+    app.kubernetes.io/component: primary
+  ports:
+  - name: tcp-postgresql
+    port: 5432
+    targetPort: 5432
+    protocol: TCP
