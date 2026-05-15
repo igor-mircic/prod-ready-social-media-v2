@@ -8,12 +8,25 @@
 # Start with: docker-compose up -d postgres
 #
 # Opt-in observability stack (Prometheus + Grafana + Tempo + Collector + Loki
-# + Alertmanager + postgres-exporter, default off):
+# + Alertmanager + postgres-exporter + cadvisor, default off):
 #   docker-compose --profile observability up -d
 #
 # Credentials below match the backend's default Spring profile in
 # backend/src/main/resources/application.yaml. Override either side via the
 # usual SPRING_DATASOURCE_* env vars when running the backend.
+#
+# Slice 13 (container saturation): every service declares an explicit
+# `mem_limit` and `cpus` cap. Without these limits, the cAdvisor saturation
+# alerts in `infra/observability/prometheus/rules/container-alerts.yml`
+# cannot fire — `container_spec_memory_limit_bytes` is unbounded (or 0,
+# depending on Docker version), CFS throttling never engages so
+# `container_cpu_cfs_throttled_periods_total` stays at zero, and the OOM
+# killer only triggers when the host itself runs out of memory. Caps are
+# sized comfortably above local-dev steady state but tight enough that a
+# runaway component trips its own alert before swamping the laptop.
+# Compose-v2 `mem_limit` / `cpus` keys are used (rather than the
+# Swarm-shaped `deploy.resources.limits` block) so the limits take effect
+# under `docker compose up` on every supported engine version.
 services:
   postgres:
     image: postgres:16-alpine
@@ -42,6 +55,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    # Slice 13: postgres runs under the default compose profile too (not
+    # just `observability`), so this limit applies whether or not the
+    # observability stack is up. Sized comfortably for local dev — the app
+    # easily fits inside 1 GiB / 2 CPU even under e2e load.
+    mem_limit: 1g
+    cpus: 2.0
 
   postgres-exporter:
     # Slice 12: surfaces Postgres internals to Prometheus — pg_stat_database
@@ -65,6 +84,8 @@ services:
       - ./infra/observability/postgres-exporter/queries.yaml:/etc/postgres-exporter/queries.yaml:ro
     depends_on:
       - postgres
+    mem_limit: 128m
+    cpus: 0.25
 
   prometheus:
     image: prom/prometheus:v2.55.1
@@ -88,6 +109,8 @@ services:
       # Slice 8: SLO recording + alerting rules + promtool test fixture.
       # `rule_files:` in prometheus.yml references this mount path.
       - ./infra/observability/prometheus/rules:/etc/prometheus/rules:ro
+    mem_limit: 512m
+    cpus: 1.0
 
   alertmanager:
     image: prom/alertmanager:v0.27.0
@@ -102,6 +125,8 @@ services:
       - "--storage.path=/alertmanager"
     depends_on:
       - webhook-sink
+    mem_limit: 256m
+    cpus: 0.5
 
   webhook-sink:
     build:
@@ -110,6 +135,8 @@ services:
     profiles: ["observability"]
     ports:
       - "8081:8080"
+    mem_limit: 128m
+    cpus: 0.25
 
   grafana:
     image: grafana/grafana:11.2.0
@@ -130,6 +157,8 @@ services:
       - loki
       - collector
       - alertmanager
+    mem_limit: 512m
+    cpus: 1.0
 
   tempo:
     image: grafana/tempo:2.6.1
@@ -140,6 +169,8 @@ services:
       - "3200:3200"
     volumes:
       - ./infra/observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
+    mem_limit: 512m
+    cpus: 1.0
 
   collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
@@ -157,6 +188,8 @@ services:
     volumes:
       - ./infra/observability/collector/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
       - ./infra/observability/logs:/var/log/backend:ro
+    mem_limit: 512m
+    cpus: 1.0
 
   loki:
     image: grafana/loki:3.2.0
@@ -171,6 +204,63 @@ services:
       - "3100:3100"
     volumes:
       - ./infra/observability/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+    mem_limit: 512m
+    cpus: 1.0
+
+  # Slice 13: cAdvisor exposes per-container CPU / memory / network /
+  # filesystem / OOM-event metrics in Prometheus exposition format.
+  # The mount footprint is wide but, with one deliberate exception
+  # (the Docker socket, which is bidirectional by nature), exclusively
+  # read-only. It is the documented production posture for cAdvisor
+  # and is the standard Kubernetes / Docker observability pattern:
+  #
+  #   - `/:/rootfs:ro` — read host process / mount info to associate
+  #     container cgroups back to their daemon-side names.
+  #   - `/var/run/docker.sock:/var/run/docker.sock:rw` — talk to the
+  #     Docker daemon (which serves on a Unix domain socket; socket I/O
+  #     is intrinsically bidirectional, so `:ro` is not possible).
+  #     cAdvisor uses the daemon to map cgroup ids to container names —
+  #     without this connection every `container_*` series carries an
+  #     `id="/docker/<hash>"` label but NO `name=` label, which would
+  #     break every dashboard panel and alert rule (all keyed on
+  #     `name!=""`). The socket is mounted as a file (not the parent
+  #     directory) so the mount works portably on both Linux hosts and
+  #     macOS Docker Desktop (where `/var/run/docker.sock` is a symlink
+  #     forwarded by Docker Desktop into the underlying VM).
+  #   - `/sys:/sys:ro` — read the cgroup filesystem itself; this is the
+  #     source of every `container_*` metric family the slice depends
+  #     on (CFS throttling counters, memory.current/limit, OOM events).
+  #   - `/var/lib/docker/:/var/lib/docker:ro` — read the daemon's
+  #     metadata store so cAdvisor can resolve a cgroup path to a
+  #     container.
+  #   - `/dev/disk/:/dev/disk:ro` — read block-device topology so
+  #     filesystem-usage metrics are attributed to the right disk.
+  #
+  # `devices: ["/dev/kmsg"]` exposes the kernel ring buffer to cAdvisor;
+  # OOM detection (the source for `container_oom_events_total`) reads
+  # kernel-emitted OOM-kill notifications from `/dev/kmsg`. Without this,
+  # cAdvisor logs "Could not configure a source for OOM detection,
+  # disabling OOM events" on startup and the metric family is populated
+  # only with zero samples.
+  #
+  # Container port `8080` is published to host `8085` so the publish
+  # does NOT collide with the backend's host-side `:8080`.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: social-cadvisor
+    profiles: ["observability"]
+    ports:
+      - "8085:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    mem_limit: 256m
+    cpus: 0.5
 
 volumes:
   postgres-data:

@@ -685,6 +685,107 @@ events become per-line log records with their bind parameters) is a
 follow-up slice; the current dashboard panels and alerts are sufficient
 for diagnosis at the local-dev scale.
 
+### Container infrastructure
+
+The same observability profile also brings up
+[cAdvisor](https://github.com/google/cadvisor) so each container in the
+stack is observable as a resource consumer (USE — Utilization,
+Saturation, Errors), not just as a target of backend-side timers or
+database-internal counters. Per-container CPU usage and CFS throttling,
+memory working set vs. limit, network I/O, restart count, and OOM-kill
+events are surfaced through Prometheus and Grafana alongside the
+existing backend, frontend, and database dashboards:
+
+```sh
+docker-compose --profile observability up -d
+```
+
+What's wired:
+
+- A new `cadvisor` service (pinned `gcr.io/cadvisor/cadvisor:v0.49.1`)
+  publishes its `/metrics` endpoint on host port `8085` (the container
+  serves on `:8080`; the publish avoids colliding with the backend's
+  host `:8080`). Prometheus picks it up as a new `cadvisor` scrape job
+  on `cadvisor:8080`; verify on
+  `http://localhost:9090/targets` that the target shows
+  `health: up` after the profile is running.
+- Grafana auto-provisions an `Infrastructure overview` dashboard at
+  `http://localhost:3000/d/infrastructure-overview` (also reachable
+  via Dashboards → Browse → "Infrastructure overview"): per-container
+  CPU usage, CPU throttling ratio, memory working-set vs. limit (bar
+  gauge + time series with limit overlay), network receive / transmit
+  bytes, container restart count over the last hour, and OOM events
+  over the last hour. Every PromQL expression filters with `name!=""`
+  to drop cAdvisor's cgroup-hierarchy series.
+- Three container-tier alerts ride the slice-11 severity routing
+  without any Alertmanager change:
+  - `ContainerCpuThrottling` (`severity=ticket`) — fires when a
+    container is throttled for >25% of CFS periods sustained over 10 m.
+  - `ContainerMemoryNearLimit` (`severity=ticket`) — fires when a
+    container's working set crosses 90% of its declared `mem_limit`
+    sustained for 5 m.
+  - `ContainerOomKilled` (`severity=page`) — fires once per OOM-kill
+    event recorded in the last 15 m.
+  All three carry the same `runbook_url` annotation contract as the
+  slice-11 alerts; stubs live at
+  `infra/observability/runbooks/ContainerCpuThrottling.md`,
+  `…/ContainerMemoryNearLimit.md`, and `…/ContainerOomKilled.md`.
+- The `promtool test rules` step gains
+  `infra/observability/prometheus/rules/container-tests.yml`, exercising
+  each alert against synthetic series (firing case, steady-state
+  non-firing case, and — for `ContainerMemoryNearLimit` — the
+  un-limited-container edge case where `container_spec_memory_limit_bytes`
+  is `0`).
+
+**Resource limits on every existing compose service.** Slice 13 also
+declares an explicit `mem_limit` and `cpus` cap on every service in
+`docker-compose.yml` (`postgres`, `prometheus`, `grafana`, `tempo`,
+`loki`, `collector`, `alertmanager`, `webhook-sink`,
+`postgres-exporter`, and `cadvisor` itself). Without these limits the
+cAdvisor saturation alerts cannot fire: `container_spec_memory_limit_bytes`
+is unbounded, CFS throttling never engages, and the OOM killer only
+triggers when the laptop's host memory runs out. Caps are sized
+comfortably above local-dev steady state (total ceiling ~4.4 GiB / ~9
+vCPU) and the inline comment block at the top of `docker-compose.yml`
+records the rationale. `postgres`'s cap applies under the default
+compose invocation too (not just `observability`), which is fine — the
+cap is set well above what local dev needs.
+
+**Explicit non-goals.**
+
+- **`node_exporter` / host-level metrics** are *not* added. The backend
+  runs on the host (not in a container), so container-tier metrics
+  structurally can't cover it; in production a Kubernetes DaemonSet
+  would add `node_exporter` per node. On macOS Docker Desktop a
+  containerised `node_exporter` would measure the Linux VM, not the
+  laptop, which would be misleading. Deferred until the backend is
+  itself containerised.
+- **`process-exporter` for the host JVM** is *not* added because
+  Micrometer (slice 1) already exposes JVM internals (heap, GC, threads,
+  CPU) on `/actuator/prometheus`. The Vite dev server is uninteresting
+  in prod.
+- **The backend is not containerised in this slice.** That is a larger
+  architectural change; this slice is constrained to additive
+  container-tier visibility for what already runs in compose.
+
+**macOS Docker Desktop caveat.** cAdvisor's Docker factory depends on a
+specific layout of the daemon's layer store (`/var/lib/docker/image/overlayfs/layerdb/mounts/<id>/mount-id`).
+Docker Desktop's Linux VM uses a different storage backend, so cAdvisor
+on macOS falls back to its Raw factory: the `container_*` metric
+families are still emitted, but with only an `id="/docker/<hash>"`
+label — the `name=` label every dashboard panel and alert keys on is
+absent. Production Linux deployments (and Linux dev hosts) do not have
+this limitation. The backend's `CadvisorIT` integration test
+acknowledges this by gating itself behind
+`-Dobservability.integration=true`; run it on a Linux host (or CI
+runner) to verify the cAdvisor pipeline end-to-end:
+
+```sh
+./backend/gradlew -p backend test \
+  --tests com.prodready.social.observability.CadvisorIT \
+  -Dobservability.integration=true
+```
+
 ## Prerequisites
 
 - Java 21

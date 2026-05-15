@@ -17,9 +17,11 @@ A single `cadvisor` service SHALL run under the `observability` profile, exposin
 - **WHEN** the docker-compose `cadvisor` service definition is read
 - **THEN** the `image:` field is `gcr.io/cadvisor/cadvisor:<explicit-version>` (not `latest` and not unpinned)
 
-#### Scenario: cadvisor declares the read-only host mounts it needs
+#### Scenario: cadvisor declares the host mounts and device passthroughs it needs
 - **WHEN** the docker-compose `cadvisor` service definition is read
-- **THEN** the service mounts the host's `/`, `/var/run`, `/sys`, `/var/lib/docker/`, and `/dev/disk/` paths into the container as read-only (`:ro`)
+- **THEN** the service mounts the host's `/`, `/sys`, `/var/lib/docker/`, and `/dev/disk/` paths into the container as read-only (`:ro`)
+- **AND** the service mounts the host's `/var/run/docker.sock` into the container (the Docker socket is bidirectional by nature, so the mount is `:rw`); without this mount cAdvisor cannot resolve cgroup ids to container names and the `name` label every dashboard panel and alert rule depends on stays empty
+- **AND** the service exposes `/dev/kmsg` to the container via the compose `devices:` block so cAdvisor can read kernel OOM-kill notifications from the ring buffer (without this `container_oom_events_total` is populated only with zero samples)
 - **AND** the service publishes container port `8080` to a host port that does not collide with any other service on the local machine (the backend runs on host `:8080`)
 
 ### Requirement: Every existing compose service declares `deploy.resources.limits`

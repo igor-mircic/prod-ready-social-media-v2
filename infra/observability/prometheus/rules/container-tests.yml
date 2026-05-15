@@ -1,0 +1,173 @@
+# promtool test rules — executable spec for the container alerts.
+#
+# Mirrors `database-tests.yml`, `slo-tests.yml`, and `fe-slo-tests.yml` in
+# shape: each stanza feeds crafted synthetic series, evaluates the rule
+# file at a simulated eval_time, and asserts which alerts are (or aren't)
+# in `firing` state with the expected labels and annotations.
+#
+# Run from the repo root with:
+#
+#   docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+#     prom/prometheus:v2.55.1 test rules /rules/container-tests.yml
+#
+# Series-name notes:
+#   - cAdvisor v0.49+ emits `container_oom_events_total` for the OOM-kill
+#     counter; older versions only export `container_memory_failcnt`.
+#   - The `name!=""` filter is critical: cAdvisor emits both per-container
+#     series (`name="<container>"`) and per-cgroup-hierarchy series
+#     (`name=""`), and grouping/aggregation that includes the empty-name
+#     series would double-count or pollute the templated alert text.
+#
+# Coverage maps spec scenarios one-for-one:
+#   - ContainerCpuThrottling   : fires when throttled/periods ratio > 0.25
+#                                sustained 10m; no-fire when ratio stays
+#                                below 0.25.
+#   - ContainerMemoryNearLimit : fires when working_set/limit > 0.9
+#                                sustained 5m; no-fire when ratio stays
+#                                below 0.9; no-fire when limit is 0
+#                                (un-limited container; spec scenario).
+#   - ContainerOomKilled       : fires when oom_events_total increments
+#                                inside 15m; no-fire when counter is flat.
+rule_files:
+  - container-alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # 1. ContainerCpuThrottling — synthetic counters where the throttled/periods
+  # ratio is 0.30 sustained for >10m. `rate(...[5m]) / rate(...[5m]) = 0.3`
+  # crosses the 0.25 threshold; `for: 10m` requires the threshold to hold for
+  # ten minutes; eval at 17m gives the rate windows time to settle and the
+  # `for:` clause time to elapse.
+  #
+  # Series shape: counters incrementing every minute. With evaluation_interval
+  # 1m and sample step 1m, `30x20` means "value 30, repeated 20 samples"; we
+  # use `0+30x20` (= 0, 30, 60, 90, …) so the counter strictly increases
+  # and `rate()` returns 30/60 = 0.5 per second. Same for the periods counter
+  # with `0+100x20` → rate 100/60 ≈ 1.67/s. Ratio = 30/100 = 0.30 > 0.25.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{name="dummy"}'
+        values: '0+30x20'
+      - series: 'container_cpu_cfs_periods_total{name="dummy"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ContainerCpuThrottling
+        exp_alerts:
+          - exp_labels:
+              name: dummy
+              severity: ticket
+            exp_annotations:
+              summary: "Container dummy is CPU-throttled (>25% of CFS periods for 10m)."
+              description: "Container `dummy` has been throttled against its CFS CPU quota for more than 25% of periods over a sustained 10-minute window. The container is hitting its `cpus:` cap; raise it in `docker-compose.yml` or investigate the workload spike."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerCpuThrottling.md"
+
+  # ---------------------------------------------------------------------------
+  # 2. ContainerCpuThrottling — steady-state ratio of 0.10 (well below 0.25);
+  # alert does NOT fire.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{name="dummy"}'
+        values: '0+10x20'
+      - series: 'container_cpu_cfs_periods_total{name="dummy"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ContainerCpuThrottling
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # 3. ContainerMemoryNearLimit — working_set / limit = 0.95 sustained for >5m.
+  # `for: 5m` requires 5 minutes of breach; eval at 7m fires.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="dummy"}'
+        values: '950x10'
+      - series: 'container_spec_memory_limit_bytes{name="dummy"}'
+        values: '1000x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              name: dummy
+              severity: ticket
+            exp_annotations:
+              summary: "Container dummy working set > 90% of its memory limit."
+              description: "Container `dummy` has held its working-set memory above 90% of its declared `mem_limit` for at least 5 minutes. The OOM killer will engage soon if the trend continues; raise the cap in `docker-compose.yml` or investigate the leak."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerMemoryNearLimit.md"
+
+  # ---------------------------------------------------------------------------
+  # 4. ContainerMemoryNearLimit — steady-state working_set / limit = 0.50;
+  # alert does NOT fire.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="dummy"}'
+        values: '500x10'
+      - series: 'container_spec_memory_limit_bytes{name="dummy"}'
+        values: '1000x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # 5. ContainerMemoryNearLimit — un-limited container scenario. Working set
+  # is non-zero but `container_spec_memory_limit_bytes` reports as 0. The
+  # alert's `(... > 0)` guard drops the limit sample for this container, so
+  # the division has no right-hand side and produces no result. Alert does
+  # NOT fire — matches the spec's un-limited-container scenario.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="unlimited"}'
+        values: '500000000x10'
+      - series: 'container_spec_memory_limit_bytes{name="unlimited"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # 6. ContainerOomKilled — counter increments by 1 inside a 15m window.
+  # `increase(... [15m])` returns ≥ 1 > 0 → alert fires (no `for:` clause).
+  # eval at 16m so the [15m] window fully covers the increment.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # 0 for 5 minutes, then steps up to 1 and stays — `increase()` over
+      # the trailing 15m sees a delta of 1.
+      - series: 'container_oom_events_total{name="dummy"}'
+        values: '0x5 1x15'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ContainerOomKilled
+        exp_alerts:
+          - exp_labels:
+              name: dummy
+              severity: page
+            exp_annotations:
+              summary: "Container dummy was OOM-killed in the last 15 minutes."
+              description: "cAdvisor recorded at least one OOM-kill event for container `dummy` within the last 15 minutes. The Linux OOM killer terminated the container after it exceeded its `mem_limit`; check the container's working-set history and decide whether to raise the cap or fix an underlying leak."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerOomKilled.md"
+
+  # ---------------------------------------------------------------------------
+  # 7. ContainerOomKilled — counter is flat at zero for the whole window.
+  # `increase()` returns 0 → alert does NOT fire.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'container_oom_events_total{name="dummy"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ContainerOomKilled
+        exp_alerts: []

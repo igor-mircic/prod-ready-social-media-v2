@@ -31,6 +31,10 @@ rule_files:
   # backed by `postgres-exporter` series. Routing uses the existing
   # `severity` tree from slice 11; no Alertmanager change needed.
   - rules/database-alerts.yml
+  # Slice 13: container-tier infra alerts (CPU throttling + memory near
+  # limit + OOM kill) backed by the `cadvisor` scrape job below. Same
+  # `severity` routing as the database alerts; no Alertmanager change.
+  - rules/container-alerts.yml
 
 # Slice 8: route firings to the Alertmanager container on the shared docker
 # network. The compose service name is `alertmanager`; its HTTP API is on
@@ -73,3 +77,18 @@ scrape_configs:
     static_configs:
       - targets:
           - postgres-exporter:9187
+
+  # Slice 13: scrape `cadvisor` for per-container resource metrics
+  # (CPU usage / CFS throttling, memory working set vs. limit, network
+  # I/O, restart count, OOM events). cAdvisor only runs under the
+  # `observability` profile, so this target is `health: down` when the
+  # profile is not running — expected. The container exposes the metrics
+  # endpoint on its native `:8080`; the host-side publish at `:8085`
+  # (see `docker-compose.yml`) is for `curl` debugging only — Prometheus
+  # reaches the exporter via the shared docker network.
+  - job_name: cadvisor
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - cadvisor:8080
