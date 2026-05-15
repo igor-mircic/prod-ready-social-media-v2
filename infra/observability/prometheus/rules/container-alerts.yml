@@ -1,0 +1,78 @@
+# Container-tier infra alerts (slice 13). Backed by `cadvisor` series;
+# loaded via the `rule_files:` glob in `prometheus.yml`.
+#
+# Routing labels follow the slice-11 contract:
+#   severity ∈ {page, ticket}
+# No `slo` label — these alerts protect container-runtime health, not a
+# user-visible SLO. The slice-11 inhibition rule (`slo=~".+"`) therefore
+# does NOT match them, which is correct: a backend-down event might mask
+# `ContainerOomKilled` on a sibling, but each container alert is
+# independently actionable.
+#
+# Cardinality / safety notes:
+#   - Every expression filters with `name!=""` to drop cAdvisor's per-cgroup
+#     hierarchy series (which carry an empty `name` label and would
+#     double-count or pollute the templated alert text).
+#   - `ContainerMemoryNearLimit` divides by `container_spec_memory_limit_bytes`,
+#     which is `0` for un-limited containers — the resulting NaN ratio
+#     never satisfies `> 0.9`, so the alert silently no-ops on any
+#     container without a declared limit. This is the desired behaviour.
+groups:
+  - name: container_alerts
+    rules:
+      # Sustained CFS throttling against a container's CPU quota. Tickets
+      # rather than pages: it usually means "raise the `cpus:` cap," not
+      # "system is down."
+      - alert: ContainerCpuThrottling
+        expr: |
+          sum by(name) (rate(container_cpu_cfs_throttled_periods_total{name!=""}[5m]))
+            /
+          sum by(name) (rate(container_cpu_cfs_periods_total{name!=""}[5m]))
+            > 0.25
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Container {{ $labels.name }} is CPU-throttled (>25% of CFS periods for 10m)."
+          description: "Container `{{ $labels.name }}` has been throttled against its CFS CPU quota for more than 25% of periods over a sustained 10-minute window. The container is hitting its `cpus:` cap; raise it in `docker-compose.yml` or investigate the workload spike."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerCpuThrottling.md"
+
+      # Working set approaches the declared memory cap. Fires before the
+      # OOM killer engages. Tickets rather than pages: capacity tuning
+      # signal, rarely user-impacting on its own.
+      #
+      # The `(... > 0)` guard on the limit filters out containers reporting
+      # `container_spec_memory_limit_bytes == 0` (un-limited containers in
+      # some daemon-version combinations). Without the guard, `WS / 0` is
+      # `+Inf` in PromQL and `+Inf > 0.9` evaluates to true — which would
+      # fire the alert on every un-limited container the daemon happens to
+      # be running. The guard turns those into "no matching right-hand
+      # side" and the division silently drops them, as required by the
+      # spec's un-limited-container no-fire scenario.
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          container_memory_working_set_bytes{name!=""}
+            /
+          (container_spec_memory_limit_bytes{name!=""} > 0)
+            > 0.9
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Container {{ $labels.name }} working set > 90% of its memory limit."
+          description: "Container `{{ $labels.name }}` has held its working-set memory above 90% of its declared `mem_limit` for at least 5 minutes. The OOM killer will engage soon if the trend continues; raise the cap in `docker-compose.yml` or investigate the leak."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerMemoryNearLimit.md"
+
+      # One or more OOM events recorded by cAdvisor in the last 15m.
+      # Pages because a container that was just killed is, by definition,
+      # currently degraded — an operator must investigate immediately.
+      # No `for:` clause: a single OOM is sufficient to page.
+      - alert: ContainerOomKilled
+        expr: |
+          increase(container_oom_events_total{name!=""}[15m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Container {{ $labels.name }} was OOM-killed in the last 15 minutes."
+          description: "cAdvisor recorded at least one OOM-kill event for container `{{ $labels.name }}` within the last 15 minutes. The Linux OOM killer terminated the container after it exceeded its `mem_limit`; check the container's working-set history and decide whether to raise the cap or fix an underlying leak."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ContainerOomKilled.md"
