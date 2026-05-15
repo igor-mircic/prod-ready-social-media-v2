@@ -72,4 +72,4 @@
 
 - [x] 10.1 Run `openspec validate add-db-observability --strict` and resolve any findings.
 - [x] 10.2 Bring the full `observability` profile up locally, run the new backend integration test, run `promtool test rules` against the full rules directory, and confirm everything green.
-- [ ] 10.3 Commit on a branch named `add-db-observability`, open the PR with the proposal/design/specs/tasks summary, and follow the autonomous-apply workflow through CI to archive.
+- [x] 10.3 Commit on a branch named `add-db-observability`, open the PR with the proposal/design/specs/tasks summary, and follow the autonomous-apply workflow through CI to archive.
