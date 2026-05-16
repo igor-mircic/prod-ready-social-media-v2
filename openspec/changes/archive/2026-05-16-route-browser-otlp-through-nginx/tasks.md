@@ -81,7 +81,7 @@
 
 ## 13. Validation, branch, commit, PR (per project workflow)
 
-- [ ] 13.1 `openspec validate route-browser-otlp-through-nginx --strict` — confirm pass.
-- [ ] 13.2 Run frontend lint + typecheck + tests; run any backend tests touched by indirect collector-config changes (none expected).
-- [ ] 13.3 Open a PR titled `Implement route-browser-otlp-through-nginx (slice 18c)` against `main`; description summarises the three signal types' new same-origin path, the bundled OTTL fix, and the FE→BE propagation findings from §10.
-- [ ] 13.4 After CI passes and reviewer approves, archive the change: `openspec archive route-browser-otlp-through-nginx`. Update memories that reference the now-fixed items (`project_redact_path_ids_attr_drift.md` → close out; `project_browser_otlp_cross_origin.md` → close out; `project_fe_be_trace_propagation_gap.md` → close out or update with findings from §10.4).
+- [x] 13.1 `openspec validate route-browser-otlp-through-nginx --strict` — confirm pass. — **Result:** `Change 'route-browser-otlp-through-nginx' is valid`.
+- [x] 13.2 Run frontend lint + typecheck + tests; run any backend tests touched by indirect collector-config changes (none expected). — `pnpm --filter frontend exec tsc -b` clean, `pnpm --filter frontend test` 73/73 pass, lint introduces zero net new errors (the 6 pre-existing errors + 1 warning come from `AuthContext.tsx` / test files untouched by this slice). Backend tests not run (no Java sources touched). CI fully verified: backend ✓, frontend ✓, prometheus ✓, e2e chromium/firefox/webkit ✓.
+- [x] 13.3 Open a PR titled `Implement route-browser-otlp-through-nginx (slice 18c)` against `main`; description summarises the three signal types' new same-origin path, the bundled OTTL fix, and the FE→BE propagation findings from §10. — PR #50: https://github.com/igor-mircic/prod-ready-social-media-v2/pull/50
+- [x] 13.4 After CI passes and reviewer approves, archive the change: `openspec archive route-browser-otlp-through-nginx`. Update memories that reference the now-fixed items (`project_redact_path_ids_attr_drift.md` → close out; `project_browser_otlp_cross_origin.md` → close out; `project_fe_be_trace_propagation_gap.md` → close out or update with findings from §10.4). — Archived as `2026-05-16-route-browser-otlp-through-nginx`. Memory updates landed in the archive commit.
