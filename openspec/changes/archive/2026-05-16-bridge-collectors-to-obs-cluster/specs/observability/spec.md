@@ -1,6 +1,6 @@
 ## MODIFIED Requirements
 
-### Requirement: The in-cluster app collector dual-writes traces to the compose collector AND the obs cluster's collector
+### Requirement: The in-cluster collector relays traces to the compose collector via the VM-host alias
 
 The in-cluster OpenTelemetry Collector running in the app cluster SHALL declare exactly two trace exporters: `otlp/compose-relay` pointing at the compose collector's published OTLP/gRPC port (`host.lima.internal:4317`, `tls.insecure: true`), and `otlp/obs-cluster` pointing at the obs cluster's collector OTLP/gRPC ingress (`host.lima.internal:14317`, `tls.insecure: true`). The single declared `traces` pipeline SHALL list BOTH exporters in its `exporters:` block. Failure or wedging of either exporter SHALL NOT block delivery via the other.
 

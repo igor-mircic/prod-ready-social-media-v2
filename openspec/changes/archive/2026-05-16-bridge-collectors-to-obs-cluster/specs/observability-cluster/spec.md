@@ -128,7 +128,7 @@ The `infra/k8s-obs/overlays/hetzner/kustomization.yaml` SHALL contain a commente
 
 ## MODIFIED Requirements
 
-### Requirement: Grafana provisions datasources for all four observability backends in the cluster
+### Requirement: Grafana stands up with no datasources configured
 
 The grafana deployment in the obs cluster SHALL provision exactly four datasources via the chart's `datasources:` configuration block, each pointing at the corresponding in-cluster `Service` DNS name in the `observability` namespace:
 
