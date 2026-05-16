@@ -119,16 +119,38 @@ portForwards:
   hostPort: 16444
 # Slice 18b (bridge-collectors-to-obs-cluster) — obs-cluster
 # collector's OTLP receivers. klipper-lb assigns the obs-cluster
-# `collector` Service the obs VM IP; these forwards then republish
-# the VM's :4317 / :4318 on the macOS host as :14317 / :14318.
+# `collector` Service the obs VM IP and the svclb DaemonSet binds
+# the Service's ports on the node's network namespace via CNI
+# hostPort — listening on `0.0.0.0:4317` / `0.0.0.0:4318` inside
+# the VM. These forwards republish those VM-side ports on the
+# macOS host as :14317 / :14318.
+#
+# `guestIP: 0.0.0.0` is REQUIRED here. Lima's default `guestIP`
+# is `127.0.0.1`, and the docs claim 127.0.0.1 also matches
+# 0.0.0.0 binds — but in practice (Lima 2.x) a rule with the
+# default guestIP does NOT override the auto-forwarder for a
+# 0.0.0.0 listener: Lima's automatic behaviour kicks in and
+# republishes on the same guest port (host :4317, colliding
+# with compose's already-published :4317) instead of honouring
+# `hostPort: 14317`. Setting `guestIP: 0.0.0.0` explicitly
+# makes the rule match the svclb's 0.0.0.0 bind and the
+# explicit hostPort takes effect.
+#
+# Slice 14 postgres gets away without this because compose-on-
+# host doesn't already own :5432, so Lima's default
+# "guest:5432 -> host:5432" auto-forward is exactly what we
+# want there. Here we MUST disambiguate.
+#
 # Compose collector owns :4317 / :4318 on the host, hence the
 # +10000 offset (same pattern as the apiserver above). MUST
 # appear BEFORE the catch-all `guestPortRange: [1, 65535],
 # ignore: true` rule below, otherwise Lima's first-match-wins
 # rule swallows them.
-- guestPort: 4317
+- guestIP: 0.0.0.0
+  guestPort: 4317
   hostPort: 14317
-- guestPort: 4318
+- guestIP: 0.0.0.0
+  guestPort: 4318
   hostPort: 14318
 # Catch-all: every other 127.0.0.1 listener inside the obs VM is
 # NOT exposed on the host. The two LGTM stacks are reached via
