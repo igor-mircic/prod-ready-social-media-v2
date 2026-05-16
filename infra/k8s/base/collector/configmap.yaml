@@ -1,0 +1,92 @@
+# In-cluster OpenTelemetry Collector pipeline (slice 18a).
+#
+# Single traces pipeline:
+#   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only)
+#     -> batch
+#     -> transform/redact-path-ids
+#     -> otlp/compose-relay (host.lima.internal:4317, tls insecure)
+#
+# The `transform/redact-path-ids` OTTL block is DUPLICATED
+# verbatim from the sibling compose collector config at
+# `infra/observability/collector/collector-config.yaml`. The two
+# coexist for the duration of the transition (slices 18a..21);
+# slice 22 (`retire-compose-observability`) deletes the compose
+# copy. If you edit one set of OTTL statements, you MUST edit
+# the other in the same commit or BE-in-k3s and BE-on-host get
+# asymmetric redaction.
+#
+# No metrics or logs pipeline declared here: the Java agent has
+# `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` (per
+# the observability spec), and BE pod log shipping lives in slice
+# 20. Adding either pipeline now would be a no-op surface that
+# rots until its producer lands.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch: {}
+
+      # Mirrors the compose collector's redact-path-ids block.
+      # Patterns, in order:
+      #   1. UUID v4 (lowercase hex with hyphens).
+      #   2. opaque hex segments of length 8+, bounded by `/` or
+      #      end-of-string. The trailing delimiter is captured
+      #      (`$$1`) because Go's RE2 has no lookahead.
+      #   3. numeric segments of length 4+, bounded as above.
+      # UUID must come first so its hex form is not eaten by the
+      # opaque-hex rule. Replacement is uniform (`{id}`).
+      transform/redact-path-ids:
+        trace_statements:
+          - context: span
+            statements:
+              - replace_pattern(name, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}")
+              - replace_pattern(name, "/[0-9a-f]{8,}(/|$)", "/{id}$$1")
+              - replace_pattern(name, "/[0-9]{4,}(/|$)", "/{id}$$1")
+              - replace_pattern(attributes["http.url"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["http.url"] != nil
+              - replace_pattern(attributes["http.url"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["http.url"] != nil
+              - replace_pattern(attributes["http.url"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["http.url"] != nil
+              - replace_pattern(attributes["http.target"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["http.target"] != nil
+              - replace_pattern(attributes["http.target"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["http.target"] != nil
+              - replace_pattern(attributes["http.target"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["http.target"] != nil
+              - replace_pattern(attributes["url.full"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.full"] != nil
+              - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+              - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+
+    extensions:
+      # Bind explicitly to 0.0.0.0 — the contrib collector's
+      # health_check extension defaults to `localhost:13133`,
+      # which the kubelet probe cannot reach from outside the
+      # pod's network namespace. Binding all interfaces is safe:
+      # the port is not on the Service, so only the pod-local
+      # kubelet probe ever reaches it.
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    exporters:
+      # Slice-15 host-alias bridge to the compose collector's
+      # published OTLP/gRPC port. Transitional: slice 18b
+      # (`bridge-collectors-to-obs-cluster`) replaces this
+      # endpoint with the obs cluster's OTLP receiver.
+      otlp/compose-relay:
+        endpoint: host.lima.internal:4317
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch, transform/redact-path-ids]
+          exporters: [otlp/compose-relay]

@@ -208,6 +208,39 @@ frontend-delete:
 # Rebuild the image + apply in one shot (the 95% path).
 frontend-rebuild: frontend-image frontend-apply
 
+# === Slice 18a (add-k3s-app-collector) — in-cluster OTel
+# collector verbs. ===
+#
+# The collector pod lives in the `social` namespace alongside the
+# backend and frontend. The backend's OTLP target points at this
+# collector's ClusterIP Service
+# (`collector.social.svc.cluster.local:4318`); the collector
+# relays traces to the compose collector at
+# `host.lima.internal:4317` for the duration of the transition
+# (slices 18a..21). See README "Collector relay (in-cluster)"
+# for the full picture.
+#
+# Two daily verbs only — the collector ships with the base
+# overlay so `just backend-apply` and `just k8s-apply` already
+# stand it up. There is no `collector-image` (the contrib image
+# is a public Docker Hub pin) and no `collector-forward` (only
+# in-cluster pods talk to it; OTLP is not interesting to point a
+# browser at).
+
+# Tail collector pod logs (follow).
+collector-logs:
+    kubectl logs -n {{PG_NAMESPACE}} deploy/collector -f
+
+# The kubelet does NOT auto-restart pods when a mounted ConfigMap's
+# data changes; `rollout restart` is the documented pattern. Blocks
+# on rollout-status (60s — the contrib collector starts in well
+# under a second; the timeout is a safety net, not an expected wait).
+#
+# Roll the collector Deployment to pick up ConfigMap edits.
+collector-rollout:
+    kubectl rollout restart deploy/collector -n {{PG_NAMESPACE}}
+    kubectl rollout status deploy/collector -n {{PG_NAMESPACE}} --timeout=60s
+
 # === Slice 17 (add-local-k3s-obs-cluster) — observability cluster
 # verbs. ===
 #

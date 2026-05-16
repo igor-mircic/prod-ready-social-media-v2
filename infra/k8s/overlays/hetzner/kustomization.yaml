@@ -93,6 +93,45 @@
 #     resource pointing the production hostname at the same-origin
 #     `/` path.
 #
+# Slice 18a (add-k3s-app-collector) — the next slice
+# (add-hetzner-deploy) will plug the collector pieces in here:
+#
+#   - Production resource caps on the collector container.
+#     Probably `requests: cpu=100m / memory=256Mi`, `limits:
+#     cpu=1000m / memory=512Mi` — generous enough to absorb a
+#     fleet's worth of OTLP traffic; the local overlay's
+#     50m/128m..500m/256m envelope assumes a single-developer
+#     span volume.
+#   - OTLP exporter endpoint override on the collector config:
+#     replace `host.lima.internal:4317` (the local relay target
+#     pointing at the compose collector) with the production-
+#     side obs-cluster OTLP receiver address. Whether that is
+#     `<obs-cluster-collector-svc>.observability.svc.cluster.local:4317`
+#     (in-cluster — same cluster as the app, NOT applicable here)
+#     or a cross-cluster Service / Ingress on the obs box (a
+#     stable DNS name + LoadBalancer/NodePort, decided in slice
+#     18b/19) lives in the Hetzner slice's open questions.
+#   - TLS / mTLS material reference: a Secret holding the
+#     collector's client cert + key for the cross-cluster export,
+#     mounted into the pod via `volumes:` + `volumeMounts:` and
+#     wired into the exporter's `tls.cert_file` / `tls.key_file` /
+#     `tls.ca_file` fields. The Secret is created out-of-band by
+#     the Hetzner slice's bootstrap script (cert-manager + a
+#     self-signed CA shared with the obs cluster — slice 19's
+#     decision).
+#   - Tighter probe timings: `livenessProbe.timeoutSeconds`
+#     explicit at 1s, `readinessProbe.periodSeconds` perhaps 3s,
+#     `livenessProbe.initialDelaySeconds` lower (the contrib
+#     collector starts in well under a second on the CAX21
+#     envelope). Final numbers measured on the real box.
+#   - Anti-affinity / pod topology constraints: the local
+#     overlay's single-replica posture is fine on a single-node
+#     Lima VM, but the Hetzner slice may grow the collector to
+#     2 replicas with a PodDisruptionBudget once the cluster
+#     gains a second node. Anti-affinity is a no-op on a
+#     single-node cluster; capture the spec when the cluster
+#     grows.
+#
 # Apply path is intentionally NOT wired into the justfile until the
 # Hetzner slice lands. `just k8s-apply` targets overlays/local only.
 apiVersion: kustomize.config.k8s.io/v1beta1
