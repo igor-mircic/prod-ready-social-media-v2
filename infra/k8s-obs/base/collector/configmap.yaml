@@ -1,12 +1,19 @@
-# Obs cluster OpenTelemetry Collector pipeline (slice 18b).
+# Obs cluster OpenTelemetry Collector pipeline (slice 18b / 18c).
 #
-# Single traces pipeline:
+# Three pipelines (slice 18c added logs and metrics symmetric with the
+# slice-18b traces dual-write from the app cluster):
 #   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — only the app
-#                  cluster collector dials this receiver)
+#                  cluster collector dials this receiver via the
+#                  klipper-lb-fronted LoadBalancer Service `collector`)
 #     -> batch
-#     -> transform/redact-path-ids
-#     -> otlp/tempo (tempo.observability.svc.cluster.local:4317,
-#                    tls insecure — in-cluster hop)
+#     -> traces:  transform/redact-path-ids
+#                 -> otlp/tempo   (tempo.observability.svc.cluster.local:4317, tls insecure)
+#     -> logs:    transform/redact-path-ids
+#                 -> otlphttp/loki (http://loki.observability.svc.cluster.local:3100/otlp,
+#                                   Loki 3.x native OTLP ingest)
+#     -> metrics: (batch only)
+#                 -> prometheusremotewrite/in-cluster
+#                    (http://prometheus-server.observability.svc.cluster.local/api/v1/write)
 #
 # Source-of-truth sibling for the `transform/redact-path-ids` OTTL
 # block: `infra/k8s/base/collector/configmap.yaml` (the app cluster
@@ -15,27 +22,26 @@
 # `infra/observability/collector/collector-config.yaml`, app
 # cluster at `infra/k8s/base/collector/configmap.yaml`, and this
 # obs cluster copy) until slice 22 (`retire-compose-observability`)
-# collapses the compose path. If you edit one set of statements
+# collapses the compose path. Slice 18c also added
+# `attributes["url.path"]` to every site (the attribute the modern
+# OTel Java agent actually emits). If you edit one set of statements
 # you MUST edit the other two in the same commit, otherwise BE-in-
 # k3s traffic gets asymmetric redaction across destinations.
 #
 # Redaction at this hop is defence-in-depth: the app collector
 # already redacts before exporting. Repeating the same statements
 # here means a future regression at the app collector cannot leak
-# high-cardinality path segments into obs tempo storage.
+# high-cardinality path segments into obs tempo / loki storage.
 #
 # No CORS block on the OTLP/HTTP receiver: only the app cluster
-# collector pod dials this receiver. The browser still ships to
-# the compose collector (slice 18c flips that), and even after
-# 18c the browser's target is the nginx-fronted app cluster
-# collector, not this one.
+# collector pod dials this receiver. The browser ships to the FE pod
+# (in-k3s nginx) or the vite dev proxy (dev), which forward to the
+# app collector — NEVER to this collector directly.
 #
-# No metrics or logs pipelines declared in this slice. Slice 20
-# (`add-k3s-pod-log-shipping`) appends a loki exporter and a logs
-# pipeline; slice 21 (`add-k3s-cluster-metrics`) appends a
-# prometheus receiver / prometheusremotewrite exporter and a
-# metrics pipeline. Declaring those pipelines now would be no-op
-# surface that rots until its producer / consumer lands.
+# No filter/frontend_only here — the app collector's logs pipeline
+# already applies that filter before exporting to this collector.
+# Repeating it would be a defence-in-depth no-op once the app
+# collector enforces it; for now it stays single-site.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -83,6 +89,13 @@ data:
               - replace_pattern(attributes["url.full"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.full"] != nil
               - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
               - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+              # Slice 18c: target the attribute the modern OTel Java
+              # agent actually emits. `http.url`/`http.target`/`url.full`
+              # are kept for defence-in-depth against older
+              # instrumentation.
+              - replace_pattern(attributes["url.path"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.path"] != nil
+              - replace_pattern(attributes["url.path"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
+              - replace_pattern(attributes["url.path"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
 
     extensions:
       # Bind explicitly to 0.0.0.0 — the contrib collector's
@@ -107,6 +120,27 @@ data:
         tls:
           insecure: true
 
+      # Slice 18c: Loki 3.x native OTLP ingest. The chart-pinned
+      # loki 3.6.7 exposes the OTLP/HTTP endpoint at `/otlp/v1/logs`
+      # on the existing loki Service. Putting OTel→Loki attribute-
+      # to-label mapping on Loki's side (design.md Decision 2)
+      # avoids drift between this collector's exporter config and
+      # any future obs collector that also writes to loki.
+      otlphttp/loki:
+        endpoint: http://loki.observability.svc.cluster.local:3100/otlp
+        tls:
+          insecure: true
+
+      # Slice 18c: prometheus remote-write into the in-cluster
+      # prometheus-server Service. The `web.enable-remote-write-
+      # receiver` flag added in `infra/k8s-obs/base/prometheus/
+      # values.yaml` lights up `POST /api/v1/write` on the
+      # chart-default `prometheus-server` Service.
+      prometheusremotewrite/in-cluster:
+        endpoint: http://prometheus-server.observability.svc.cluster.local/api/v1/write
+        tls:
+          insecure: true
+
     service:
       extensions: [health_check]
       pipelines:
@@ -114,3 +148,11 @@ data:
           receivers: [otlp]
           processors: [batch, transform/redact-path-ids]
           exporters: [otlp/tempo]
+        logs:
+          receivers: [otlp]
+          processors: [batch, transform/redact-path-ids]
+          exporters: [otlphttp/loki]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheusremotewrite/in-cluster]

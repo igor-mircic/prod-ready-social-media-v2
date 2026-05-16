@@ -95,6 +95,8 @@
 # slice. `just obs-apply` targets overlays/local only. The slice
 # that adds Hetzner deploy will add a separate `obs-apply-hetzner`
 # (or merge the two via a context-aware variable).
+#
+# slice 18c added logs and metrics pipelines targeting in-cluster loki and prometheus — production-side adds mTLS termination on the OTLP receiver in slice 19; storage / retention tuning lands in the Hetzner deploy slice.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

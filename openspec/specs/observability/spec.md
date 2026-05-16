@@ -1027,7 +1027,7 @@ The frontend SHALL declare a module `frontend/src/observability/tracer.ts` expor
 
 - return immediately as a no-op when `import.meta.env.VITE_OTEL_ENABLED` is not the string `"true"`;
 - when enabled, construct a `Resource` carrying at minimum the attributes `service.name="frontend"` and `service.version=<value of import.meta.env.VITE_APP_VERSION>`;
-- register a `WebTracerProvider` with that resource, a `ZoneContextManager`, a `BatchSpanProcessor`, and an `OTLPTraceExporter` whose URL defaults to `http://localhost:4318/v1/traces` and is overridable via `import.meta.env.VITE_OTEL_TRACES_ENDPOINT`;
+- register a `WebTracerProvider` with that resource, a `ZoneContextManager`, a `BatchSpanProcessor`, and an `OTLPTraceExporter` whose URL defaults to `/v1/traces` (relative, resolved by the browser against `document.baseURI`) and is overridable via `import.meta.env.VITE_OTEL_TRACES_ENDPOINT`;
 - register exactly three auto-instrumentations: `DocumentLoadInstrumentation`, `FetchInstrumentation`, and `UserInteractionInstrumentation`;
 - write exactly one console line of the form `OTel telemetry enabled: traces → <endpoint>` when boot succeeds, so a reader can confirm activation from devtools.
 
@@ -1053,6 +1053,18 @@ The module `frontend/src/main.tsx` SHALL invoke `bootstrapTelemetry()` synchrono
 - **WHEN** the page first loads
 - **THEN** the console carries exactly one line of the form `OTel telemetry enabled: traces → <endpoint>`
 - **AND** a `WebTracerProvider` is registered globally (verifiable via `trace.getTracerProvider()`).
+
+#### Scenario: Default endpoint is a same-origin relative URL
+
+- **WHEN** a reader inspects the `DEFAULT_ENDPOINT` constant in `frontend/src/observability/tracer.ts`
+- **THEN** the value is the string `/v1/traces`
+- **AND** the value does NOT start with `http://` or `https://`.
+
+#### Scenario: Default endpoint at bake time matches the source default
+
+- **WHEN** a reader inspects the `VITE_OTEL_TRACES_ENDPOINT` `ARG` default in `frontend/Dockerfile`
+- **THEN** the default value is `/v1/traces`
+- **AND** the value does NOT start with `http://` or `https://`.
 
 #### Scenario: Application source has no compile-time dependency on the OTel SDK outside the observability module
 
@@ -1113,45 +1125,15 @@ Spans SHALL NOT carry any resource attribute whose value is derived from request
 - **WHEN** a span lands in Tempo
 - **THEN** its resource attribute `service.version` equals `0.0.0`.
 
-### Requirement: OTel Collector OTLP/HTTP receiver allows CORS for Vite origins
-
-The file `infra/observability/collector/collector-config.yaml` SHALL declare a `cors` block on the `otlp` receiver's `http` protocol stanza with:
-
-- `allowed_origins` containing at minimum `http://localhost:5173` (Vite dev) and `http://localhost:4173` (Vite preview),
-- `allowed_headers` containing at minimum `*` OR the explicit list `["Content-Type", "traceparent", "tracestate"]`.
-
-The receiver SHALL continue to listen on `0.0.0.0:4318` and SHALL continue to accept gRPC OTLP on `:4317` unchanged. The CORS block SHALL apply only to the HTTP protocol; the gRPC receiver SHALL NOT carry a CORS block.
-
-#### Scenario: Collector config declares the CORS allowlist on the OTLP/HTTP receiver
-
-- **WHEN** a reader inspects `infra/observability/collector/collector-config.yaml`
-- **THEN** the file declares an `otlp` receiver with an `http` protocol stanza
-- **AND** that stanza contains a `cors` block
-- **AND** the `cors.allowed_origins` list includes both `http://localhost:5173` and `http://localhost:4173`.
-
-#### Scenario: Preflight from Vite dev origin is accepted
-
-- **GIVEN** the observability profile is running
-- **WHEN** a client issues `OPTIONS http://localhost:4318/v1/traces` with `Origin: http://localhost:5173` and `Access-Control-Request-Method: POST`
-- **THEN** the response status is 200 OR 204
-- **AND** the response carries `Access-Control-Allow-Origin: http://localhost:5173`.
-
-#### Scenario: Preflight from a disallowed origin is rejected
-
-- **GIVEN** the observability profile is running
-- **WHEN** a client issues `OPTIONS http://localhost:4318/v1/traces` with `Origin: https://evil.example.com`
-- **THEN** the response does NOT carry `Access-Control-Allow-Origin: https://evil.example.com`
-- **AND** the response does NOT carry `Access-Control-Allow-Origin: *`.
-
 ### Requirement: Collector redacts high-cardinality path segments from FE and BE spans
 
-The file `infra/observability/collector/collector-config.yaml` SHALL declare a `transform` processor (`transform/redact-path-ids` or equivalent name) that, on every span passing through the `traces/default` pipeline, replaces matches of the following patterns inside span name, `http.url`, `http.target`, and `url.full` (where present) with the literal token `{id}`:
+The file `infra/observability/collector/collector-config.yaml` SHALL declare a `transform` processor (`transform/redact-path-ids` or equivalent name) that, on every span passing through the `traces/default` pipeline, replaces matches of the following patterns inside span name, `http.url`, `http.target`, `url.full`, and `url.path` (where present) with the literal token `{id}`:
 
 - UUID v4 (lowercase hex with hyphens): `[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`;
 - opaque hex segments of length 8 or more (`[0-9a-f]{8,}`) when bounded by `/` or end-of-string;
 - numeric segments of length 4 or more (`[0-9]{4,}`) when bounded by `/` or end-of-string.
 
-The processor SHALL be wired into the `traces/default` pipeline before the Tempo exporter, after any receiver-side processors. The processor SHALL apply to spans from any `service.name` value (FE and BE both).
+The processor SHALL be wired into the `traces/default` pipeline before the Tempo exporter, after any receiver-side processors. The processor SHALL apply to spans from any `service.name` value (FE and BE both). The inclusion of `url.path` is REQUIRED — the modern OTel Java agent (slice-3 pin) emits HTTP path information primarily on `attributes["url.path"]`; older deprecated attributes (`http.url`, `http.target`, `url.full`) remain in the target list because some instrumentation libraries still emit them and the OTTL operation is idempotent on absent attributes.
 
 #### Scenario: Collector pipeline lists the redaction processor before the Tempo exporter
 
@@ -1160,6 +1142,13 @@ The processor SHALL be wired into the `traces/default` pipeline before the Tempo
 - **AND** the `service.pipelines.traces` (or `service.pipelines.traces/default`) `processors` list includes that processor
 - **AND** the processor appears before any Tempo exporter in the same pipeline's `exporters` evaluation order.
 
+#### Scenario: OTTL statements target `url.path` alongside the deprecated attributes
+
+- **WHEN** a reader inspects the `transform/redact-path-ids` processor's `trace_statements` block
+- **THEN** the statements target the attribute key `url.path` for every redaction pattern (UUID, opaque hex, numeric)
+- **AND** the statements also target the keys `http.url`, `http.target`, and `url.full` (kept as defence-in-depth for legacy instrumentation)
+- **AND** the statements also target `span.name`.
+
 #### Scenario: UUID segment is redacted in a browser-emitted span
 
 - **GIVEN** the frontend issues a fetch to `/api/v1/users/00000000-0000-0000-0000-000000000abc/follow`
@@ -1167,22 +1156,13 @@ The processor SHALL be wired into the `traces/default` pipeline before the Tempo
 - **THEN** the span's `http.url` attribute does NOT contain the substring `00000000-0000-0000-0000-000000000abc`
 - **AND** the span's `http.url` attribute contains the substring `{id}`.
 
-#### Scenario: Numeric id segment is redacted in a backend-emitted span
+#### Scenario: Numeric id segment is redacted in a backend-emitted span via `url.path`
 
 - **GIVEN** the backend handles `GET /api/v1/users/123456`
-- **WHEN** the resulting span is queried from Tempo
-- **THEN** no span attribute on that span contains the substring `/123456`
-- **AND** at least one span attribute contains the substring `/{id}`.
-
-### Requirement: Browser → Collector traffic goes direct; Vite proxy is NOT extended to `/v1/traces`
-
-The file `frontend/vite.config.ts` SHALL NOT declare a proxy entry whose target is the OTel Collector. The proxy configuration SHALL remain restricted to backend paths (currently `/api/v1` and `/actuator`).
-
-#### Scenario: Vite proxy config covers only backend paths
-
-- **WHEN** a reader inspects the `server.proxy` (and `preview.proxy`) blocks in `frontend/vite.config.ts`
-- **THEN** every proxy key matches either `/api/v1*` or `/actuator*`
-- **AND** no proxy key matches `/v1/traces`, `/otlp*`, or any path under the Collector.
+- **AND** the resulting span carries `attributes["url.path"] = "/api/v1/users/123456"` (the attribute the modern Java agent emits)
+- **WHEN** the span is queried from Tempo
+- **THEN** the span's `url.path` attribute does NOT contain the substring `/123456`
+- **AND** the span's `url.path` attribute contains the substring `/{id}`.
 
 ### Requirement: Browser-side header capture is left at OTel defaults
 
@@ -1307,7 +1287,7 @@ The frontend SHALL declare a module `frontend/src/observability/meter.ts` export
 
 - return immediately as a no-op when `import.meta.env.VITE_OTEL_ENABLED` is not the string `"true"`;
 - when enabled, register a `MeterProvider` whose `Resource` is the shared `Resource` instance exported by `frontend/src/observability/resource.ts` (carrying at minimum `service.name="frontend"` and `service.version`);
-- register a `PeriodicExportingMetricReader` whose exporter is an `OTLPMetricExporter` whose URL defaults to `http://localhost:4318/v1/metrics` and is overridable via `import.meta.env.VITE_OTEL_METRICS_ENDPOINT`;
+- register a `PeriodicExportingMetricReader` whose exporter is an `OTLPMetricExporter` whose URL defaults to `/v1/metrics` (relative, resolved by the browser against `document.baseURI`) and is overridable via `import.meta.env.VITE_OTEL_METRICS_ENDPOINT`;
 - set the reader's export interval from `import.meta.env.VITE_OTEL_METRICS_EXPORT_INTERVAL_MS` if defined as a positive integer, otherwise default to `15000` (15 s, matching Prometheus's `scrape_interval`);
 - write exactly one console line of the form `OTel telemetry enabled: metrics → <endpoint>` when boot succeeds.
 
@@ -1327,6 +1307,12 @@ The module `frontend/src/main.tsx` SHALL invoke `bootstrapMetrics()` synchronous
 - **WHEN** the page first loads
 - **THEN** the console carries exactly one line of the form `OTel telemetry enabled: metrics → <endpoint>`
 - **AND** at least one POST to `<endpoint>` is observed within `2 * exportIntervalMillis` (i.e. within 30 s at the default).
+
+#### Scenario: Default endpoint is a same-origin relative URL
+
+- **WHEN** a reader inspects the `DEFAULT_ENDPOINT` constant in `frontend/src/observability/meter.ts`
+- **THEN** the value is the string `/v1/metrics`
+- **AND** the value does NOT start with `http://` or `https://`.
 
 #### Scenario: Bootstrap runs after `bootstrapTelemetry()` and before `createRoot(...)`
 
@@ -1572,10 +1558,10 @@ a `LoggerProvider` from `@opentelemetry/sdk-logs`, share the same
 `frontend/src/observability/resource.ts` module), and register
 one `BatchLogRecordProcessor` exporting via `OTLPLogExporter`
 from `@opentelemetry/exporter-logs-otlp-http` to
-`http://localhost:4318/v1/logs` by default. When
-`VITE_OTEL_ENABLED` is unset or `false`, the bootstrap SHALL be a
-no-op and SHALL NOT register any provider, listener, or
-processor.
+`/v1/logs` (relative, resolved by the browser against
+`document.baseURI`) by default. When `VITE_OTEL_ENABLED` is unset
+or `false`, the bootstrap SHALL be a no-op and SHALL NOT register
+any provider, listener, or processor.
 
 The default export endpoint MUST be overridable via
 `VITE_OTEL_LOGS_ENDPOINT`. The bootstrap function MUST be named
@@ -1594,6 +1580,12 @@ The default export endpoint MUST be overridable via
 - **WHEN** `VITE_OTEL_ENABLED` is unset or `false` and the app boots
 - **THEN** `bootstrapErrorReporting()` returns immediately without
   side effects and no global logger handler is registered
+
+#### Scenario: Default endpoint is a same-origin relative URL
+
+- **WHEN** a reader inspects the `DEFAULT_ENDPOINT` constant in `frontend/src/observability/errors.ts`
+- **THEN** the value is the string `/v1/logs`
+- **AND** the value does NOT start with `http://` or `https://`.
 
 ### Requirement: Frontend captures all four canonical browser error surfaces
 
@@ -3002,4 +2994,36 @@ The obs-cluster path's address (`host.lima.internal:14317`) is the local mirror 
 - **WHEN** the in-cluster backend serves a request whose path includes a UUID, opaque-hex segment, or numeric id (e.g. `/api/v1/users/c0ffee00-1234-5678-9abc-deadbeef0000/profile`)
 - **AND** the resulting span lands in both compose tempo and obs tempo
 - **THEN** the span's `name`, `attributes.http.url`, `attributes.http.target`, and `attributes.url.full` fields show the high-cardinality segment replaced with the literal token `{id}` in BOTH backends
+
+### Requirement: Vite dev server proxies browser OTLP same-origin to the compose collector
+
+The file `frontend/vite.config.ts` SHALL declare proxy entries under both `server.proxy` and `preview.proxy` that map the three browser OTLP path prefixes to the compose collector's OTLP/HTTP receiver:
+
+- `/v1/traces` → `http://localhost:4318` (preserving the path)
+- `/v1/logs` → `http://localhost:4318`
+- `/v1/metrics` → `http://localhost:4318`
+
+These entries SHALL be declared alongside any existing `/api/` and `/actuator/` proxy entries. The dev loop (`pnpm dev` on `:5173`) and the preview loop (`pnpm preview` on `:4173`) SHALL both treat browser OTLP URLs as same-origin relative paths, matching the in-k3s nginx-served bundle's path layout from the `kubernetes` capability.
+
+#### Scenario: server.proxy declares the three OTLP path entries
+
+- **WHEN** a reader inspects the `server.proxy` block in `frontend/vite.config.ts`
+- **THEN** the block declares an entry whose key matches `/v1/traces`
+- **AND** the block declares an entry whose key matches `/v1/logs`
+- **AND** the block declares an entry whose key matches `/v1/metrics`
+- **AND** each entry's `target` is `http://localhost:4318`.
+
+#### Scenario: preview.proxy declares the three OTLP path entries
+
+- **WHEN** a reader inspects the `preview.proxy` block in `frontend/vite.config.ts`
+- **THEN** the same three keys (`/v1/traces`, `/v1/logs`, `/v1/metrics`) are declared
+- **AND** each entry's `target` is `http://localhost:4318`.
+
+#### Scenario: Browser POSTs reach the compose collector through the dev proxy
+
+- **GIVEN** the observability profile is running (compose collector on `:4318`)
+- **AND** `pnpm dev` is running on `:5173` with `VITE_OTEL_ENABLED=true`
+- **WHEN** a browser tab on `http://localhost:5173` triggers a UI action that produces telemetry
+- **THEN** the resulting `POST /v1/traces` to `http://localhost:5173/v1/traces` succeeds with HTTP 2xx (or 4xx from the collector, NOT a 404 from vite)
+- **AND** the request is observable in the compose collector's logs.
 

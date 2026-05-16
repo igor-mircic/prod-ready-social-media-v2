@@ -6,9 +6,10 @@ import {
 } from '@opentelemetry/sdk-metrics'
 import { onCLS, onFCP, onINP, onLCP, onTTFB } from 'web-vitals'
 
+import { resolveEndpointUrl } from './endpoint'
 import { frontendResource } from './resource'
 
-const DEFAULT_ENDPOINT = 'http://localhost:4318/v1/metrics'
+const DEFAULT_ENDPOINT = '/v1/metrics'
 const DEFAULT_EXPORT_INTERVAL_MS = 15_000
 
 type ViteEnv = {
@@ -52,7 +53,7 @@ export function bootstrapMetrics(): void {
   )
 
   const reader = new PeriodicExportingMetricReader({
-    exporter: new OTLPMetricExporter({ url: endpoint }),
+    exporter: new OTLPMetricExporter({ url: resolveEndpointUrl(endpoint) }),
     exportIntervalMillis,
   })
 
