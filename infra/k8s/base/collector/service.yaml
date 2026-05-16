@@ -1,0 +1,29 @@
+# ClusterIP Service in front of the collector Deployment. The
+# stable FQDN `collector.social.svc.cluster.local` is what the
+# backend pod's OTel agent dials (see
+# `infra/k8s/base/backend/deployment.yaml`
+# OTEL_EXPORTER_OTLP_ENDPOINT).
+#
+# No NodePort, no LoadBalancer — only in-cluster pods talk to
+# this Service in this slice. The cross-VM transport decision
+# (NodePort vs LoadBalancer vs Lima alias) lives in slice 18b.
+#
+# The healthcheck port (:13133) is intentionally NOT on the
+# Service; kubelet probes it directly on the pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP

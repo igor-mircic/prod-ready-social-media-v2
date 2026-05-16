@@ -153,13 +153,57 @@ the layering is obvious (push hostname, manifest hostname, in-VM hostname
 are three different concerns and using one name for all three would couple
 them).
 
-**OTLP transport — transitional choice.** The OpenTelemetry collector still
-lives in `docker-compose --profile observability`. The in-cluster backend
-reaches it via `OTEL_EXPORTER_OTLP_ENDPOINT=http://host.lima.internal:4318`
-(the same VM-host alias the registry mirror uses). A future
-observability-migration slice will replace this with an in-cluster Service
-DNS name once Prometheus / Grafana / Tempo / Loki migrate too. The host
-backend's `localhost:4318` default is unchanged.
+**OTLP transport — now in-cluster (slice 18a).** The in-cluster backend's
+`OTEL_EXPORTER_OTLP_ENDPOINT` points at the in-cluster OTel Collector
+Service: `http://collector.social.svc.cluster.local:4318`. The collector
+pod (`infra/k8s/base/collector/`) lives in the same `social` namespace and
+relays traces to the compose collector via `host.lima.internal:4317`, so
+compose Grafana on `:3000` still shows in-cluster backend traces — same
+trace count, same redaction outcome, same dashboards. The one difference
+versus the slice-15 topology is a single extra hop *inside* the cluster.
+
+The obs cluster (`social-obs`) is NOT yet wired in — its Grafana on `:3001`
+remains empty. Slice 18b (`bridge-collectors-to-obs-cluster`) replaces the
+collector's `host.lima.internal:4317` exporter target with the obs cluster's
+OTLP receiver; slice 22 (`retire-compose-observability`) retires the
+compose stack once the obs cluster has absorbed everything. The host
+backend's `localhost:4318` default is unchanged — `./gradlew bootRun` still
+ships direct to the compose collector.
+
+Rollback shortcut: a one-line edit on `infra/k8s/base/backend/deployment.yaml`
+swapping `OTEL_EXPORTER_OTLP_ENDPOINT` back to `http://host.lima.internal:4318`
+restores the pre-slice-18a topology immediately; the in-cluster collector
+Deployment can then be deleted independently with `kubectl delete deploy,svc,cm
+-n social -l app.kubernetes.io/name=collector`.
+
+### Collector relay (in-cluster)
+
+`infra/k8s/base/collector/` declares an `otel/opentelemetry-collector-contrib:0.111.0`
+Deployment (single replica) fronted by a ClusterIP Service named `collector`.
+The pipeline is one traces pipeline (`otlp` receiver → `batch` +
+`transform/redact-path-ids` → `otlp/compose-relay` exporter at
+`host.lima.internal:4317`). No CORS on the OTLP/HTTP receiver — only
+in-cluster pods talk to it. No metrics or logs pipeline — the Java agent
+has `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none`, and pod
+log shipping lives in a future slice.
+
+```sh
+just collector-logs     # tail collector pod logs (follow)
+just collector-rollout  # rollout-restart the Deployment + wait for Ready
+```
+
+`collector-rollout` is the path to pick up ConfigMap edits — the kubelet
+does NOT auto-restart pods when a mounted ConfigMap changes. There is no
+`collector-image` recipe (the contrib image is a public Docker Hub pin)
+and no `collector-forward` (only in-cluster pods dial the OTLP receivers).
+
+**Redaction lives in two places during the transition.** The
+`transform/redact-path-ids` OTTL block in `infra/k8s/base/collector/configmap.yaml`
+is duplicated verbatim from `infra/observability/collector/collector-config.yaml`
+(the compose collector's config). Both files carry a header comment
+naming the sibling and warning about drift; slice 22 collapses the two
+into one. If you edit one set of OTTL patterns, you MUST edit the other
+in the same commit or BE-in-k3s and BE-on-host get asymmetric redaction.
 
 The k3s backend Service is `ClusterIP` only — no Ingress, no LoadBalancer.
 The Traefik-vs-ingress-nginx decision deferred in slice 14 stays deferred;
@@ -480,13 +524,26 @@ the workload that now lives behind that port.
 Lima VM / k3s cluster — see
 [Local observability cluster](#local-observability-cluster) above. The
 compose stack documented in *this* section is still primary and still
-receives app telemetry on `:4318`; the in-cluster stack stands up empty
-(no data sources, no dashboards) until slice 18 wires the cross-cluster
-data flow. **Today** (slice 17), the compose Grafana on `:3000` is where
-you look to see real data. **Tomorrow** (post-slice-22), the in-cluster
-Grafana on `:3001` will be the only target — at which point this section
-will move to the obs cluster cross-link entirely and the compose stack
-will be retired.
+receives app telemetry on `:4318` (from the browser SDK and from the host
+backend) plus `:4317` (from the in-cluster collector's relay); the
+in-cluster stack stands up empty (no data sources, no dashboards) until
+slice 18b wires the cross-cluster data flow. **Today** (slices 17, 18a),
+the compose Grafana on `:3000` is where you look to see real data.
+**Tomorrow** (post-slice-22), the in-cluster Grafana on `:3001` will be
+the only target — at which point this section will move to the obs cluster
+cross-link entirely and the compose stack will be retired.
+
+**BE-in-k3s telemetry path (slice 18a).** When the backend runs inside the
+local k3s cluster (`just backend-apply`), its OTel Java agent no longer
+dials `host.lima.internal:4318` directly. Instead it ships OTLP/HTTP to
+the in-cluster collector Service at `collector.social.svc.cluster.local:4318`;
+the collector then relays the spans to the compose collector via
+`host.lima.internal:4317` (OTLP/gRPC). Compose Grafana still shows in-cluster
+backend traces unchanged — just with one extra in-cluster hop on the way.
+The host backend (`./gradlew bootRun`) is unaffected; it continues to ship
+direct to `localhost:4318`. See
+[Run the backend in cluster (optional)](#run-the-backend-in-cluster-optional)
+for the recipe surface and the rollback shortcut.
 
 ```sh
 docker-compose --profile observability up -d

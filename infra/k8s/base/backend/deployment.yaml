@@ -18,13 +18,17 @@
 #     NOT the slice-14 LoadBalancer (`postgres-lb`). LoadBalancer is
 #     for the host loop only — in-cluster traffic stays inside the
 #     cluster (see design.md Decision 10).
-#   - OTEL_EXPORTER_OTLP_ENDPOINT pointed at the still-in-compose
-#     collector via `host.lima.internal:4318` — Lima's host alias
-#     (verified to resolve from a pod in slice implementation).
-#     This is the slice's transitional choice; a future
-#     observability-migration slice replaces this target with an
-#     in-cluster Service DNS name (see design.md Decision 6 and the
-#     `observability` spec delta).
+#   - OTEL_EXPORTER_OTLP_ENDPOINT pointed at the in-cluster
+#     collector Service's FQDN (`collector.social.svc.cluster.local:4318`).
+#     The slice-15 transitional choice (`host.lima.internal:4318`)
+#     was the host-alias bridge to the compose collector; slice 18a
+#     (add-k3s-app-collector) retired it for in-cluster backends by
+#     standing up the in-cluster collector pod and pointing the
+#     backend at its Service. The in-cluster collector still relays
+#     traces to the compose collector via `host.lima.internal:4317`
+#     for the duration of the transition; slice 18b
+#     (bridge-collectors-to-obs-cluster) replaces that relay target
+#     without touching this Deployment.
 #
 # Probes (design.md Decision 9):
 #   - startupProbe: 5s × 30 = 150s grace for JVM cold start +
@@ -81,7 +85,7 @@ spec:
             - name: SPRING_DATASOURCE_URL
               value: jdbc:postgresql://postgres-postgresql.social.svc.cluster.local:5432/social
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://host.lima.internal:4318
+              value: http://collector.social.svc.cluster.local:4318
           resources:
             requests:
               cpu: 250m

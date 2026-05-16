@@ -1,0 +1,39 @@
+# OpenTelemetry Collector workload — slice 18a
+# (add-k3s-app-collector). This is the first of three sub-slices
+# that move observability out of compose-on-host into the app /
+# obs k3s clusters. This sub-slice does data-plane work only: the
+# in-cluster collector stands up, the backend's OTLP target flips
+# from `host.lima.internal:4318` to the in-cluster Service FQDN,
+# and the collector relays traces back to the compose collector
+# via `host.lima.internal:4317`. No data crosses the app-cluster /
+# obs-cluster boundary yet (that is slice 18b
+# `bridge-collectors-to-obs-cluster`). No browser change yet (that
+# is slice 18c `route-browser-otlp-through-nginx`).
+#
+# Sibling config: `infra/observability/collector/collector-config.yaml`
+# (the compose collector). The two collectors duplicate the
+# `transform/redact-path-ids` OTTL block on purpose for the
+# duration of the transition — if you edit one, edit the other.
+# Slice 22 (`retire-compose-observability`) collapses the two
+# into one.
+#
+# The image tag is pinned via the `images:` directive below so
+# bumping it is a one-line edit. The Deployment references the
+# image by name without an inline tag.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: collector
+      app.kubernetes.io/part-of: social
+
+resources:
+  - ./configmap.yaml
+  - ./deployment.yaml
+  - ./service.yaml
+
+images:
+  - name: otel/opentelemetry-collector-contrib
+    newTag: 0.111.0
