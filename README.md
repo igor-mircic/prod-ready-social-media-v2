@@ -543,18 +543,33 @@ cert material on the receiver before any cross-network deploy.
 #### Operator cutover after pulling this slice
 
 ```sh
-# 1. Pick up the new Lima portForwards (Lima ONLY re-reads
-#    portForwards on VM start — a running VM does not see the
-#    edit).
-limactl stop social-obs && just obs-up
+# 1. Pick up the new Lima portForwards on the EXISTING obs VM.
+#    Lima snapshots the source yaml at instance creation, so a
+#    plain `limactl start` reads the stale persisted copy — and
+#    `just obs-up` errors with "instance already exists". Patch
+#    the persisted yaml in-place with `limactl edit --set`,
+#    then stop+start. (If you don't have a `social-obs` VM yet,
+#    `just obs-up` reads `infra/lima/obs.yaml` directly and
+#    this step is unnecessary — skip to step 2.)
+limactl edit social-obs --set '
+  .portForwards = [
+    .portForwards[0],
+    {"guestIP": "0.0.0.0", "guestPort": 4317, "hostPort": 14317},
+    {"guestIP": "0.0.0.0", "guestPort": 4318, "hostPort": 14318},
+    .portForwards[1]
+  ]'
+limactl stop social-obs && limactl start social-obs
 
 # 2. Apply the obs cluster manifests (new collector, four
 #    datasources in grafana).
 kustomize build --enable-helm infra/k8s-obs/overlays/local \
   | kubectl --context social-obs apply -f -
 
-# 3. Apply the app cluster updates (dual-write traces pipeline).
+# 3. Apply the app cluster updates (dual-write traces pipeline)
+#    and roll the app collector so kubelet remounts the new
+#    ConfigMap.
 just backend-apply
+just collector-rollout
 ```
 
 Then, in two terminals, tail both collectors:
@@ -589,19 +604,47 @@ If `just collector-logs` shows `otlp/obs-cluster` connection
 errors, check in order:
 
 - `kubectl --context social-obs -n observability get svc collector -o wide`
-  — `EXTERNAL-IP` should be the obs VM's primary IP, NOT
-  `<pending>`. `<pending>` means klipper-lb has not yet assigned
-  an IP; usually a fresh `obs-up` resolves it.
-- `lsof -i :14317` on the host — should show one Lima
-  `socket_vmnet` (or hostagent) listener and nothing else. If
-  another process holds the port, the Lima forward did not bind
-  and `host.lima.internal:14317` resolves but refuses.
+  — `EXTERNAL-IP` should be the obs VM's primary IP (e.g.
+  `192.168.5.15`), NOT `<pending>`. `<pending>` means klipper-lb
+  has not yet assigned an IP; usually a fresh `obs-up` resolves
+  it.
+- `lsof -nP -iTCP:14317 -sTCP:LISTEN` on the host — should show
+  `limactl` listening on `127.0.0.1:14317`. If the listener is
+  absent, the Lima portForward did not take effect; see the next
+  bullet. If the listener is on `127.0.0.1:4317` instead,
+  Lima's auto-forwarder fell back to the default port mapping
+  — the `guestIP: 0.0.0.0` portForward rule is missing.
 - `limactl list` — `social-obs` must be in `Running` state. A
   stopped VM has no portForwards.
-- After editing `infra/lima/obs.yaml`, **the operator MUST run
-  `limactl stop social-obs && just obs-up`** before the new
-  forwards apply. Lima does not re-read `portForwards` on a
-  running VM.
+- **An existing `social-obs` VM does NOT pick up edits to
+  `infra/lima/obs.yaml`.** Lima snapshots the source yaml at
+  instance creation; subsequent `limactl start` calls use the
+  per-instance persisted yaml at
+  `~/.lima/social-obs/lima.yaml`. After pulling a slice that
+  edits `obs.yaml` (e.g. slice 18b adding the OTLP forwards),
+  the operator MUST do ONE of:
+  - `limactl edit social-obs --set '<yq expr>'` — preserves
+    k3s state, surgical mutation. For slice 18b:
+    ```sh
+    limactl edit social-obs --set '
+      .portForwards = [
+        .portForwards[0],
+        {"guestIP": "0.0.0.0", "guestPort": 4317, "hostPort": 14317},
+        {"guestIP": "0.0.0.0", "guestPort": 4318, "hostPort": 14318},
+        .portForwards[1]
+      ]'
+    limactl stop social-obs && limactl start social-obs
+    ```
+  - `limactl delete social-obs && just obs-up` — destructive
+    (drops the obs cluster's PVCs and k3s state), but the
+    repeatable green-field path.
+
+  A bare `limactl stop social-obs && just obs-up` does NOT help
+  for an existing instance — `just obs-up` invokes
+  `limactl start --name=social-obs infra/lima/obs.yaml` which
+  errors with *"instance already exists"* on an existing
+  instance, and a plain `limactl start social-obs` reads the
+  stale persisted yaml.
 
 ## Logging in locally
 
