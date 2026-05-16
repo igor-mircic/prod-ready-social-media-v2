@@ -50,3 +50,10 @@ infra/observability/logs/*.json
 # with the same pattern.
 infra/k8s/**/charts/
 infra/k8s-obs/**/charts/
+
+# Slice 19 (add-cross-cluster-mtls). Private key material for the
+# cross-cluster self-signed CA and the per-cluster leaf certs stays
+# out of git. Per-directory `.gitignore`s in each `certs/` dir cover
+# this too — this repo-root entry is defence-in-depth so a future
+# certs/ directory cannot accidentally leak a key.
+infra/**/certs/*.key

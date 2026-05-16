@@ -1,0 +1,58 @@
+# openssl config for slice 19 (add-cross-cluster-mtls).
+#
+# Drives `just obs-certs`. One self-signed CA + two leaves (obs
+# collector server cert, app collector client cert). The recipe
+# selects the right section via `-extensions <name>` / `-extfile`
+# and passes the subject via `-subj` on the command line so each
+# openssl invocation reads only the section it needs (no [ req ]
+# block here — that keeps the CA / server / client identities
+# parameterised by name rather than by which section openssl picks
+# up by default).
+#
+# `req_distinguished_name`-style sections for each identity are
+# kept here for reproducibility / documentation of the subject DNs;
+# the recipe mirrors the same values via `-subj`.
+
+# ---------- CA ----------
+
+[ ca_dn ]
+CN = prod-ready-social-media local CA
+O  = prod-ready-social-media
+OU = slice-19-cross-cluster-mtls
+
+[ ca_ext ]
+basicConstraints     = critical, CA:TRUE
+keyUsage             = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+
+# ---------- Obs collector server cert ----------
+
+[ server_dn ]
+CN = collector.observability.svc.cluster.local
+O  = prod-ready-social-media
+OU = obs-collector
+
+[ server_ext ]
+basicConstraints     = critical, CA:FALSE
+keyUsage             = critical, digitalSignature, keyEncipherment
+extendedKeyUsage     = serverAuth
+subjectKeyIdentifier = hash
+subjectAltName       = @server_san
+
+[ server_san ]
+DNS.1 = host.lima.internal
+DNS.2 = localhost
+DNS.3 = collector.observability.svc.cluster.local
+
+# ---------- App collector client cert ----------
+
+[ client_dn ]
+CN = app-collector
+O  = prod-ready-social-media
+OU = app-collector
+
+[ client_ext ]
+basicConstraints     = critical, CA:FALSE
+keyUsage             = critical, digitalSignature, keyEncipherment
+extendedKeyUsage     = clientAuth
+subjectKeyIdentifier = hash

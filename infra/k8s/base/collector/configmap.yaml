@@ -1,4 +1,4 @@
-# In-cluster OpenTelemetry Collector pipeline (slice 18a / 18b / 18c).
+# In-cluster OpenTelemetry Collector pipeline (slice 18a / 18b / 18c / 19).
 #
 # Three pipelines, each DUAL-WRITING to compose AND obs destinations:
 #   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only,
@@ -6,14 +6,23 @@
 #                  to this receiver per slice 18c)
 #     -> batch
 #     -> traces:  transform/redact-path-ids
-#                 -> otlp/compose-relay      (host.lima.internal:4317,  tls insecure)
-#                 -> otlp/obs-cluster        (host.lima.internal:14317, tls insecure)
+#                 -> otlp/compose-relay      (host.lima.internal:4317,  plaintext)
+#                 -> otlp/obs-cluster        (host.lima.internal:14317, mTLS, slice 19)
 #     -> logs:    transform/redact-path-ids, filter/frontend_only
-#                 -> otlphttp/compose-relay-logs  (host.lima.internal:4318)
-#                 -> otlphttp/obs-cluster-logs    (host.lima.internal:14318)
+#                 -> otlphttp/compose-relay-logs  (http://host.lima.internal:4318,   plaintext)
+#                 -> otlphttp/obs-cluster-logs    (https://host.lima.internal:14318, mTLS, slice 19)
 #     -> metrics: (batch only; FE web-vitals have no PII / no path data)
-#                 -> otlphttp/compose-relay-metrics (host.lima.internal:4318)
-#                 -> otlphttp/obs-cluster-metrics   (host.lima.internal:14318)
+#                 -> otlphttp/compose-relay-metrics (http://host.lima.internal:4318,   plaintext)
+#                 -> otlphttp/obs-cluster-metrics   (https://host.lima.internal:14318, mTLS, slice 19)
+#
+# Slice 19 (add-cross-cluster-mtls) wraps the three `*obs-cluster*`
+# exporters in mTLS against a shared self-signed CA (cert material
+# produced by `just obs-certs`; mounted at /etc/otelcol-contrib/certs/
+# via a Kustomize secretGenerator-produced Secret). The compose-relay
+# exporters STAY plaintext — that path is local-mirror-only and dies
+# in slice 22 (`retire-compose-observability`); layering mTLS on it
+# would be churn-for-zero-benefit. After slice 22 collapses dual-write
+# to obs-only, every exporter remaining in this file is TLS-wrapped.
 #
 # Slice 18b added the second traces exporter (compose + obs). Slice 18c
 # adds the logs and metrics pipelines symmetrically: every browser
@@ -137,46 +146,59 @@ data:
         tls:
           insecure: true
 
-      # Slice 18b cross-cluster path. `host.lima.internal:14317`
-      # is the local mirror of the Hetzner reality (the obs box's
-      # tailscale / private-network IP). Lima publishes the obs
-      # VM's :4317 as host :14317 (see
+      # Slice 18b cross-cluster path, slice 19 wraps it in mTLS.
+      # `host.lima.internal:14317` is the local mirror of the
+      # Hetzner reality (the obs box's tailscale / private-network
+      # IP). Lima publishes the obs VM's :4317 as host :14317 (see
       # `infra/lima/obs.yaml` portForwards); klipper-lb inside the
       # obs VM terminates the LoadBalancer Service `collector` on
       # :4317 and routes to the obs cluster's collector pod. The
       # +10000 offset avoids collision with the compose collector's
-      # already-published host :4317. The Hetzner overlay
-      # explicitly notes the production analogue of this address
-      # is the obs box's private-network IP terminated with mTLS
-      # — slice 19 (`add-cross-cluster-mtls`) introduces the TLS
-      # material on the obs collector's *receiver* without
-      # touching this exporter's address.
+      # already-published host :4317.
+      #
+      # Slice 19: the endpoint stays scheme-less — OTLP/gRPC clients
+      # in the otelcol exporter pick the TLS transport based on the
+      # `tls:` block, not the URL scheme (only OTLP/HTTP exporters
+      # use http:// vs https://). The Lima portForward is L4 so the
+      # TLS handshake bytes flow through transparently.
       otlp/obs-cluster:
         endpoint: host.lima.internal:14317
         tls:
-          insecure: true
+          cert_file: /etc/otelcol-contrib/certs/client.crt
+          key_file: /etc/otelcol-contrib/certs/client.key
+          ca_file: /etc/otelcol-contrib/certs/ca.crt
+          insecure: false
 
       # Slice 18c logs / metrics dual-write. OTLP/HTTP because the
       # compose collector's `:4318` listener already accepts all three
       # signal types from slices 5/6/7. The `+10000` offset on the obs
       # exporters matches the traces convention and the
-      # `infra/lima/obs.yaml` portForward.
+      # `infra/lima/obs.yaml` portForward. Slice 19 wraps both obs-
+      # cluster OTLP/HTTP exporters in mTLS (https:// scheme + same
+      # four `tls:` keys as the gRPC exporter); the two compose-relay
+      # OTLP/HTTP exporters stay plaintext.
       otlphttp/compose-relay-logs:
         endpoint: http://host.lima.internal:4318
         tls:
           insecure: true
       otlphttp/obs-cluster-logs:
-        endpoint: http://host.lima.internal:14318
+        endpoint: https://host.lima.internal:14318
         tls:
-          insecure: true
+          cert_file: /etc/otelcol-contrib/certs/client.crt
+          key_file: /etc/otelcol-contrib/certs/client.key
+          ca_file: /etc/otelcol-contrib/certs/ca.crt
+          insecure: false
       otlphttp/compose-relay-metrics:
         endpoint: http://host.lima.internal:4318
         tls:
           insecure: true
       otlphttp/obs-cluster-metrics:
-        endpoint: http://host.lima.internal:14318
+        endpoint: https://host.lima.internal:14318
         tls:
-          insecure: true
+          cert_file: /etc/otelcol-contrib/certs/client.crt
+          key_file: /etc/otelcol-contrib/certs/client.key
+          ca_file: /etc/otelcol-contrib/certs/ca.crt
+          insecure: false
 
     service:
       extensions: [health_check]

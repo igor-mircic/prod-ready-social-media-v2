@@ -57,6 +57,13 @@ spec:
             - name: config
               mountPath: /etc/otelcol-contrib
               readOnly: true
+            # Slice 19 (add-cross-cluster-mtls). The certs Secret is
+            # produced by the kustomization's secretGenerator; the
+            # OTLP receiver's tls: blocks (both protocols.grpc and
+            # protocols.http) reference paths under this mount.
+            - name: certs
+              mountPath: /etc/otelcol-contrib/certs
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /
@@ -86,3 +93,10 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
+        # Slice 19 (add-cross-cluster-mtls). Secret name is suffixed
+        # with a content hash by Kustomize's secretGenerator (no
+        # `disableNameSuffixHash: true`); re-running `just obs-certs`
+        # produces a new Secret name and the apply rolls the pod.
+        - name: certs
+          secret:
+            secretName: collector-certs

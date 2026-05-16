@@ -1,0 +1,4 @@
+# Slice 19 (add-cross-cluster-mtls). The app collector's mTLS client
+# key stays out of git; `client.crt` and `ca.crt` are public and
+# SHALL be committed. Re-generate via `just obs-certs`.
+*.key
