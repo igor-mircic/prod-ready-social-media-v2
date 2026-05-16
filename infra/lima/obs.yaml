@@ -39,14 +39,35 @@
 #                     `kubernetes-admin@kubernetes` context (which
 #                     serves on :6443 on macOS).
 #
-# No other forwards are declared in this slice. Grafana, Prometheus,
-# Loki, Tempo, and Alertmanager are reached via on-demand
-# `kubectl port-forward` (driven by the `just obs-grafana` recipe
-# and the verification port-forwards in tasks 9.5–9.7). Adding a
-# klipper-lb LoadBalancer Service for grafana was considered and
-# rejected (design.md Decision 5 / Open Question 5) — the obs stack
-# is not always running, so on-demand port-forwarding fits its
-# posture better than always-bound host ports.
+# Other forwards declared in this file:
+#
+#   localhost:14317 → obs-cluster collector OTLP/gRPC (guest :4317).
+#   localhost:14318 → obs-cluster collector OTLP/HTTP (guest :4318).
+#                     Slice 18b (bridge-collectors-to-obs-cluster).
+#                     The +10000 offset is the convention this VM
+#                     uses for "the obs cluster's analogue of
+#                     compose / app-cluster port X": compose
+#                     collector already owns :4317/:4318 on the
+#                     host, so collisions are guaranteed without
+#                     the offset. Symmetric with the apiserver
+#                     disambiguation above (app :16443, obs :16444).
+#                     The app cluster collector's
+#                     `otlp/obs-cluster` exporter dials
+#                     `host.lima.internal:14317` to reach the obs
+#                     collector via this forward + klipper-lb.
+#                     Lima ONLY re-reads `portForwards` on VM
+#                     start — `limactl stop social-obs &&
+#                     just obs-up` is the operator step that picks
+#                     up these forwards after pulling slice 18b.
+#
+# Grafana, Prometheus, Loki, Tempo, and Alertmanager are reached
+# via on-demand `kubectl port-forward` (driven by the
+# `just obs-grafana` recipe and the verification port-forwards in
+# tasks 9.5–9.7). Adding a klipper-lb LoadBalancer Service for
+# grafana was considered and rejected (design.md Decision 5 /
+# Open Question 5) — the obs stack is not always running, so on-
+# demand port-forwarding fits its posture better than always-bound
+# host ports.
 #
 # We opt the obs VM OUT of Lima's default "forward every guest
 # 127.0.0.1 listener to the same host port" via a catch-all
@@ -96,6 +117,19 @@ portForwards:
 # :6443 for its conventional `kubernetes-admin@kubernetes` context.
 - guestPort: 6443
   hostPort: 16444
+# Slice 18b (bridge-collectors-to-obs-cluster) — obs-cluster
+# collector's OTLP receivers. klipper-lb assigns the obs-cluster
+# `collector` Service the obs VM IP; these forwards then republish
+# the VM's :4317 / :4318 on the macOS host as :14317 / :14318.
+# Compose collector owns :4317 / :4318 on the host, hence the
+# +10000 offset (same pattern as the apiserver above). MUST
+# appear BEFORE the catch-all `guestPortRange: [1, 65535],
+# ignore: true` rule below, otherwise Lima's first-match-wins
+# rule swallows them.
+- guestPort: 4317
+  hostPort: 14317
+- guestPort: 4318
+  hostPort: 14318
 # Catch-all: every other 127.0.0.1 listener inside the obs VM is
 # NOT exposed on the host. The two LGTM stacks are reached via
 # `kubectl port-forward` against the in-cluster Services rather

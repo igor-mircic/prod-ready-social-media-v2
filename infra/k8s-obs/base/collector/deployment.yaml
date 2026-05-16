@@ -1,0 +1,88 @@
+# Obs cluster OpenTelemetry Collector Deployment (slice 18b).
+# Single replica, no PDB, no HPA — dev cluster posture. The
+# config lives in the `collector-config` ConfigMap mounted at
+# `/etc/otelcol-contrib/`; editing the ConfigMap does NOT
+# auto-restart pods, use `just obs-collector-rollout` after edits.
+#
+# Probes target the bundled `health_check` extension on :13133
+# (a bare GET against the OTLP/HTTP receiver returns 404, which
+# kubelet treats as unhealthy).
+#
+# Image is referenced by name without an inline tag; the
+# directory's `kustomization.yaml` `images:` directive resolves
+# the tag (otel/opentelemetry-collector-contrib:0.111.0, same
+# pin as the compose collector and the app cluster collector —
+# three users, one pin).
+#
+# Memory limit is intentionally 512Mi (vs the app cluster
+# collector's 256Mi): this collector is the cross-cluster
+# aggregation point and will absorb the app cluster's traces
+# today plus slice 20's log records and slice 21's metric data
+# points later. 2x headroom for the destination-side collector
+# is a sensible starting envelope; slice 19/20/21 each get a
+# chance to revisit.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: collector
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib
+          args:
+            - --config=/etc/otelcol-contrib/config.yaml
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: healthcheck
+              containerPort: 13133
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: config
+          configMap:
+            name: collector-config
+            items:
+              - key: config.yaml
+                path: config.yaml

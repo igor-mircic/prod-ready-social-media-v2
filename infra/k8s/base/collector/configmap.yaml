@@ -1,19 +1,38 @@
-# In-cluster OpenTelemetry Collector pipeline (slice 18a).
+# In-cluster OpenTelemetry Collector pipeline (slice 18a + 18b).
 #
-# Single traces pipeline:
+# Single traces pipeline that DUAL-WRITES to two destinations:
 #   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only)
 #     -> batch
 #     -> transform/redact-path-ids
-#     -> otlp/compose-relay (host.lima.internal:4317, tls insecure)
+#     -> otlp/compose-relay (host.lima.internal:4317,  tls insecure)
+#     -> otlp/obs-cluster   (host.lima.internal:14317, tls insecure)
 #
-# The `transform/redact-path-ids` OTTL block is DUPLICATED
-# verbatim from the sibling compose collector config at
-# `infra/observability/collector/collector-config.yaml`. The two
-# coexist for the duration of the transition (slices 18a..21);
-# slice 22 (`retire-compose-observability`) deletes the compose
-# copy. If you edit one set of OTTL statements, you MUST edit
-# the other in the same commit or BE-in-k3s and BE-on-host get
-# asymmetric redaction.
+# Slice 18b (bridge-collectors-to-obs-cluster) added the second
+# exporter. The collector fans the same batch out to both
+# destinations; the exporters have independent retry / queue /
+# failure state — a wedged obs collector does NOT block the
+# compose path. This mirrors the slice-17 design's "build the new
+# house before tearing down the old one" sequencing: compose
+# grafana keeps showing exactly what it shows today, obs grafana
+# grows the same view alongside it, and slice 22
+# (`retire-compose-observability`) is the one that drops
+# `otlp/compose-relay` from the pipeline and collapses dual-write
+# back to single-exporter (obs-only).
+#
+# Three collectors share the `transform/redact-path-ids` OTTL
+# block byte-for-byte until slice 22:
+#   - compose at `infra/observability/collector/collector-config.yaml`
+#   - app cluster at this file
+#   - obs cluster at `infra/k8s-obs/base/collector/configmap.yaml`
+# If you edit one set of OTTL statements, you MUST edit the other
+# two in the same commit, otherwise BE-in-k3s traffic gets
+# asymmetric redaction across destinations.
+#
+# Dual-write is local-only — `infra/k8s/overlays/hetzner/kustomization.yaml`
+# explicitly notes that Hetzner MUST NOT inherit dual-write
+# (slice 22 collapses it before any prod cutover; doubling
+# outbound trace volume from the app cluster in prod is a
+# non-trivial bandwidth cost we don't want by accident).
 #
 # No metrics or logs pipeline declared here: the Java agent has
 # `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` (per
@@ -75,11 +94,36 @@ data:
 
     exporters:
       # Slice-15 host-alias bridge to the compose collector's
-      # published OTLP/gRPC port. Transitional: slice 18b
-      # (`bridge-collectors-to-obs-cluster`) replaces this
-      # endpoint with the obs cluster's OTLP receiver.
+      # published OTLP/gRPC port. Slice 18b
+      # (`bridge-collectors-to-obs-cluster`) keeps this exporter
+      # in place during the transition window (alongside the new
+      # `otlp/obs-cluster` exporter below) so the operator can
+      # open compose grafana and obs grafana side-by-side and
+      # confirm identical backend traces. Slice 22
+      # (`retire-compose-observability`) drops this exporter and
+      # the corresponding `otlp/compose-relay` entry from the
+      # traces pipeline's `exporters:` list.
       otlp/compose-relay:
         endpoint: host.lima.internal:4317
+        tls:
+          insecure: true
+
+      # Slice 18b cross-cluster path. `host.lima.internal:14317`
+      # is the local mirror of the Hetzner reality (the obs box's
+      # tailscale / private-network IP). Lima publishes the obs
+      # VM's :4317 as host :14317 (see
+      # `infra/lima/obs.yaml` portForwards); klipper-lb inside the
+      # obs VM terminates the LoadBalancer Service `collector` on
+      # :4317 and routes to the obs cluster's collector pod. The
+      # +10000 offset avoids collision with the compose collector's
+      # already-published host :4317. The Hetzner overlay
+      # explicitly notes the production analogue of this address
+      # is the obs box's private-network IP terminated with mTLS
+      # — slice 19 (`add-cross-cluster-mtls`) introduces the TLS
+      # material on the obs collector's *receiver* without
+      # touching this exporter's address.
+      otlp/obs-cluster:
+        endpoint: host.lima.internal:14317
         tls:
           insecure: true
 
@@ -89,4 +133,8 @@ data:
         traces:
           receivers: [otlp]
           processors: [batch, transform/redact-path-ids]
-          exporters: [otlp/compose-relay]
+          # Dual-write: order is not significant for OTel
+          # multi-exporter fan-out (each exporter has independent
+          # retry/queue state), but the list is alphabetized for
+          # stable diffs.
+          exporters: [otlp/compose-relay, otlp/obs-cluster]
