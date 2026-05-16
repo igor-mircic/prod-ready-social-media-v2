@@ -35,19 +35,19 @@ The repository SHALL contain a `frontend/.dockerignore` file that excludes at mi
 
 ### Requirement: The production-shape image bakes the in-cluster Vite env defaults
 
-The `frontend/Dockerfile` builder stage SHALL accept build-time arguments for the three Vite env vars the frontend reads at build time: `VITE_API_BASE_URL`, `VITE_OTEL_ENABLED`, and `VITE_OTEL_TRACES_ENDPOINT`. Their default values, when no `--build-arg` is supplied, SHALL be `''` (empty string), `'true'`, and `'http://localhost:4318'` respectively — the values appropriate for the in-cluster local-overlay topology. The builder stage SHALL expose these as `ENV` so Vite's build-time env resolution picks them up. The runtime image SHALL NOT itself read these env vars at container start (they are baked into the emitted JS bundle).
+The `frontend/Dockerfile` builder stage SHALL accept build-time arguments for the three Vite env vars the frontend reads at build time: `VITE_API_BASE_URL`, `VITE_OTEL_ENABLED`, and `VITE_OTEL_TRACES_ENDPOINT`. Their default values, when no `--build-arg` is supplied, SHALL be `''` (empty string), `'true'`, and `'http://localhost:4318/v1/traces'` respectively — the values appropriate for the in-cluster local-overlay topology. The OTLP trace endpoint MUST include the `/v1/traces` path suffix because the OTLP HTTP exporter uses the URL verbatim and does not auto-append it. The builder stage SHALL expose these as `ENV` so Vite's build-time env resolution picks them up. The runtime image SHALL NOT itself read these env vars at container start (they are baked into the emitted JS bundle).
 
 #### Scenario: Dockerfile declares the three build args with the documented defaults
 - **WHEN** a reader inspects the builder stage in `frontend/Dockerfile`
 - **THEN** an `ARG VITE_API_BASE_URL` directive exists with a default of `""` (empty string)
 - **AND** an `ARG VITE_OTEL_ENABLED` directive exists with a default of `"true"`
-- **AND** an `ARG VITE_OTEL_TRACES_ENDPOINT` directive exists with a default of `"http://localhost:4318"`
+- **AND** an `ARG VITE_OTEL_TRACES_ENDPOINT` directive exists with a default of `"http://localhost:4318/v1/traces"` (the path suffix is required — the OTLP HTTP exporter uses the URL verbatim and does not auto-append `/v1/traces`)
 - **AND** each ARG is exported as an `ENV` of the same name in the builder stage so Vite resolves it during `pnpm build`
 
 #### Scenario: Build with defaults produces an in-cluster-ready bundle
 - **WHEN** a developer runs `just frontend-image` (which invokes `docker build -f frontend/Dockerfile -t 127.0.0.1:5000/frontend:dev .` from the repo root) with no `--build-arg` overrides
 - **THEN** the resulting image's bundle uses relative URLs for API calls (no absolute origin baked into `/api/*` fetches)
-- **AND** the bundle's OTel traces exporter points at `http://localhost:4318`
+- **AND** the bundle's OTel traces exporter points at `http://localhost:4318/v1/traces`
 
 #### Scenario: Build context is the repo root, not `frontend/`
 - **WHEN** a reader inspects the `frontend-image` recipe in `justfile`

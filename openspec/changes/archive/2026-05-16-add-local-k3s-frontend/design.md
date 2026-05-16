@@ -141,7 +141,12 @@ The baked-in defaults for the local image:
 
 - `VITE_API_BASE_URL=''` — empty string. The browser hits the same origin it loaded the bundle from. Combined with nginx's reverse-proxy on `/api/*`, the call lands in the right place without any per-environment URL knowledge in the bundle.
 - `VITE_OTEL_ENABLED='true'` — keeps browser OTel on. The slice does not remove or add observability; it preserves what slice 5 (frontend traces) and slice 6 (frontend RUM metrics) set up.
-- `VITE_OTEL_TRACES_ENDPOINT='http://localhost:4318'` — the *browser* still runs on macOS and reaches the host collector directly on `localhost:4318`. The transport is identical to today's `pnpm dev` flow.
+- `VITE_OTEL_TRACES_ENDPOINT='http://localhost:4318/v1/traces'` — the *browser* still runs on macOS and reaches the host collector directly on `localhost:4318`. The path suffix is required because the OTLP HTTP exporter uses the URL verbatim (it does not auto-append `/v1/traces`). Metrics and logs are NOT baked; their defaults in `meter.ts` / `errors.ts` (`/v1/metrics`, `/v1/logs`) apply, which is fine for the local-overlay case where the browser reaches the same host collector.
+
+**Post-archive corrections** (caught by manual browser-side validation of task 6.9 / 6.7 — the original slice missed both):
+
+- The initial bake was `VITE_OTEL_TRACES_ENDPOINT='http://localhost:4318'` (no `/v1/traces`), which made the browser POST traces to `/` and the collector return 404. The corrected default includes the path.
+- The OTel Collector's CORS `allowed_origins` list initially included only `http://localhost:5173` (Vite dev) and `http://localhost:4173` (Vite preview / e2e). In the `pnpm dev` flow the OTLP transport is *same-origin* (Vite proxies `/v1/traces` to the collector); the slice's framing — "browser reaches `localhost:4318` directly, transport identical to `pnpm dev`" — missed that the in-k3s topology has no proxy and therefore needs explicit CORS for `http://localhost:13000`. `infra/observability/collector/collector-config.yaml` adds that origin.
 
 Rebuild-for-Hetzner is the trade-off: shipping the production image will require `docker build --build-arg VITE_API_BASE_URL=https://api.<host>` (or similar). That extra build step is captured in the Hetzner overlay's commented stub.
 

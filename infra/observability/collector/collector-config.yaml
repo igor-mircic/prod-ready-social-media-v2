@@ -63,6 +63,11 @@ receivers:
           allowed_origins:
             - http://localhost:5173
             - http://localhost:4173
+            # Slice 16 (add-local-k3s-frontend): when the bundle is served
+            # by the in-k3s nginx via `just frontend-forward`, the browser
+            # origin is :13000. Without this entry the cross-origin OTLP
+            # POSTs (traces, logs, metrics) are blocked by preflight.
+            - http://localhost:13000
           allowed_headers:
             - "*"
 
