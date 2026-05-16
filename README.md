@@ -723,6 +723,43 @@ direct to `localhost:4318`. See
 [Run the backend in cluster (optional)](#run-the-backend-in-cluster-optional)
 for the recipe surface and the rollback shortcut.
 
+**Browser OTLP path (slice 18c).** Browser telemetry no longer ships
+cross-origin direct to the compose collector. Three signals (traces, logs,
+metrics) leave the browser as same-origin POSTs to relative paths
+`/v1/traces`, `/v1/logs`, `/v1/metrics`. Two reverse-proxy surfaces resolve
+those relative URLs:
+
+- **In-k3s (production-shape):** the frontend pod's nginx (`frontend/docker/nginx.conf`)
+  carries a `location /v1/` block that `proxy_pass`es to the in-cluster
+  collector Service at `collector.social.svc.cluster.local:4318`. Browser
+  origin and collector origin are the same (`:13000` via
+  `just frontend-forward`), so no CORS preflight is involved.
+- **Dev loop (`pnpm dev` on `:5173`, `pnpm preview` on `:4173`):**
+  `frontend/vite.config.ts` declares `/v1/{traces,logs,metrics}` proxy
+  entries under both `server.proxy` and `preview.proxy`, targeting
+  `http://localhost:4318` (the compose collector). The browser sees
+  same-origin URLs; the vite dev server forwards them to the compose
+  collector. **Running `pnpm dev` therefore requires
+  `docker compose --profile observability up -d` so the vite proxy has a
+  target** — otherwise the `/v1/*` POSTs return 502 from vite.
+
+The OTel browser SDK exporters' fetch transport wraps the configured URL in
+`new URL(url)` before posting, which rejects path-only strings without a
+base. `frontend/src/observability/endpoint.ts` provides a small
+`resolveEndpointUrl` shim that prefixes `globalThis.location.origin` for
+relative paths; absolute URLs pass through unchanged. Both
+`tracer.ts`/`errors.ts`/`meter.ts`'s `DEFAULT_ENDPOINT` and the Dockerfile's
+`VITE_OTEL_*_ENDPOINT` build args are the relative `/v1/*` paths.
+
+No CORS allowlist exists anywhere in the chain: the compose collector's
+`receivers.otlp.protocols.http.cors` block was deleted in this slice, and
+the obs k3s collector never carried one. From the app k3s collector
+onward, browser-emitted signals fan out symmetrically with backend traces
+— logs and metrics dual-write to both the compose collector
+(`host.lima.internal:4318`) and the obs k3s collector
+(`host.lima.internal:14318`) so compose Grafana and obs Grafana stay
+side-by-side comparable until slice 22 retires the compose path.
+
 ```sh
 docker-compose --profile observability up -d
 ```

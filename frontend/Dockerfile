@@ -31,18 +31,24 @@ FROM node:22-alpine AS builder
 
 ARG VITE_API_BASE_URL=""
 ARG VITE_OTEL_ENABLED="true"
-# Trace endpoint must include the `/v1/traces` path suffix — the OTLP
-# HTTP exporter uses the URL verbatim and does not append the OTLP
-# path. The frontend's `tracer.ts` default is the same shape; this
-# bake matches it. Metrics and logs are intentionally NOT baked so
-# their `tracer.ts` / `meter.ts` / `errors.ts` defaults
-# (`/v1/metrics`, `/v1/logs`) apply — the Hetzner overlay rebuild
-# will need to override all three for production URLs.
-ARG VITE_OTEL_TRACES_ENDPOINT="http://localhost:4318/v1/traces"
+# Slice 18c flipped the three browser-OTLP defaults to same-origin
+# relative paths. The in-k3s frontend nginx reverse-proxies `/v1/*`
+# to the app k3s collector; `pnpm dev` proxies the same paths via
+# `frontend/vite.config.ts`. The exporters' fetch transport resolves
+# relative paths against `globalThis.location.origin` via the shim in
+# `frontend/src/observability/endpoint.ts` (the SDK's URL-normalisation
+# would otherwise reject path-only strings). The Hetzner overlay can
+# rebuild with `--build-arg VITE_OTEL_*_ENDPOINT=...` to point at a
+# production OTLP collector behind its own ingress.
+ARG VITE_OTEL_TRACES_ENDPOINT="/v1/traces"
+ARG VITE_OTEL_LOGS_ENDPOINT="/v1/logs"
+ARG VITE_OTEL_METRICS_ENDPOINT="/v1/metrics"
 
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \
     VITE_OTEL_ENABLED=$VITE_OTEL_ENABLED \
-    VITE_OTEL_TRACES_ENDPOINT=$VITE_OTEL_TRACES_ENDPOINT
+    VITE_OTEL_TRACES_ENDPOINT=$VITE_OTEL_TRACES_ENDPOINT \
+    VITE_OTEL_LOGS_ENDPOINT=$VITE_OTEL_LOGS_ENDPOINT \
+    VITE_OTEL_METRICS_ENDPOINT=$VITE_OTEL_METRICS_ENDPOINT
 
 WORKDIR /app
 

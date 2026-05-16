@@ -5,10 +5,11 @@ import {
   LoggerProvider,
 } from '@opentelemetry/sdk-logs'
 
+import { resolveEndpointUrl } from './endpoint'
 import { installFrontendErrorHandlers } from './error-handlers'
 import { frontendResource } from './resource'
 
-const DEFAULT_ENDPOINT = 'http://localhost:4318/v1/logs'
+const DEFAULT_ENDPOINT = '/v1/logs'
 
 type ViteEnv = {
   VITE_OTEL_ENABLED?: string
@@ -48,7 +49,7 @@ export function bootstrapErrorReporting(): void {
     resource: frontendResource,
     processors: [
       new BatchLogRecordProcessor(
-        new OTLPLogExporter({ url: endpoint }),
+        new OTLPLogExporter({ url: resolveEndpointUrl(endpoint) }),
         scheduledDelayMillis !== undefined ? { scheduledDelayMillis } : undefined,
       ),
     ],

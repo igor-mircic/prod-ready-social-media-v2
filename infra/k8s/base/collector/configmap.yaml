@@ -1,23 +1,37 @@
-# In-cluster OpenTelemetry Collector pipeline (slice 18a + 18b).
+# In-cluster OpenTelemetry Collector pipeline (slice 18a / 18b / 18c).
 #
-# Single traces pipeline that DUAL-WRITES to two destinations:
-#   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only)
+# Three pipelines, each DUAL-WRITING to compose AND obs destinations:
+#   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only,
+#                  the frontend pod's nginx reverse-proxies `/v1/*`
+#                  to this receiver per slice 18c)
 #     -> batch
-#     -> transform/redact-path-ids
-#     -> otlp/compose-relay (host.lima.internal:4317,  tls insecure)
-#     -> otlp/obs-cluster   (host.lima.internal:14317, tls insecure)
+#     -> traces:  transform/redact-path-ids
+#                 -> otlp/compose-relay      (host.lima.internal:4317,  tls insecure)
+#                 -> otlp/obs-cluster        (host.lima.internal:14317, tls insecure)
+#     -> logs:    transform/redact-path-ids, filter/frontend_only
+#                 -> otlphttp/compose-relay-logs  (host.lima.internal:4318)
+#                 -> otlphttp/obs-cluster-logs    (host.lima.internal:14318)
+#     -> metrics: (batch only; FE web-vitals have no PII / no path data)
+#                 -> otlphttp/compose-relay-metrics (host.lima.internal:4318)
+#                 -> otlphttp/obs-cluster-metrics   (host.lima.internal:14318)
 #
-# Slice 18b (bridge-collectors-to-obs-cluster) added the second
-# exporter. The collector fans the same batch out to both
-# destinations; the exporters have independent retry / queue /
-# failure state — a wedged obs collector does NOT block the
-# compose path. This mirrors the slice-17 design's "build the new
-# house before tearing down the old one" sequencing: compose
-# grafana keeps showing exactly what it shows today, obs grafana
-# grows the same view alongside it, and slice 22
-# (`retire-compose-observability`) is the one that drops
-# `otlp/compose-relay` from the pipeline and collapses dual-write
-# back to single-exporter (obs-only).
+# Slice 18b added the second traces exporter (compose + obs). Slice 18c
+# adds the logs and metrics pipelines symmetrically: every browser
+# OTLP signal now arrives on this collector via the FE pod's nginx
+# `/v1/` reverse-proxy and fans out to BOTH destinations. The compose
+# receiver-side pipelines already accept all three signal types on the
+# same `:4318` listener; the dual-write here keeps compose grafana and
+# obs grafana side-by-side comparable until slice 22 retires the
+# compose path.
+#
+# Exporters have independent retry / queue / failure state — a wedged
+# obs collector does NOT block the compose path or vice-versa. This
+# mirrors the slice-17 design's "build the new house before tearing
+# down the old one" sequencing: compose grafana keeps showing exactly
+# what it shows today, obs grafana grows the same view alongside it,
+# and slice 22 (`retire-compose-observability`) drops every
+# `*compose-relay*` exporter and collapses dual-write back to
+# single-exporter (obs-only).
 #
 # Three collectors share the `transform/redact-path-ids` OTTL
 # block byte-for-byte until slice 22:
@@ -26,19 +40,16 @@
 #   - obs cluster at `infra/k8s-obs/base/collector/configmap.yaml`
 # If you edit one set of OTTL statements, you MUST edit the other
 # two in the same commit, otherwise BE-in-k3s traffic gets
-# asymmetric redaction across destinations.
+# asymmetric redaction across destinations. Slice 18c also updates
+# every site to target `attributes["url.path"]` (the attribute the
+# modern OTel Java agent actually emits) alongside the deprecated
+# `http.url` / `http.target` / `url.full` keys.
 #
 # Dual-write is local-only — `infra/k8s/overlays/hetzner/kustomization.yaml`
 # explicitly notes that Hetzner MUST NOT inherit dual-write
 # (slice 22 collapses it before any prod cutover; doubling
 # outbound trace volume from the app cluster in prod is a
 # non-trivial bandwidth cost we don't want by accident).
-#
-# No metrics or logs pipeline declared here: the Java agent has
-# `OTEL_METRICS_EXPORTER=none` and `OTEL_LOGS_EXPORTER=none` (per
-# the observability spec), and BE pod log shipping lives in slice
-# 20. Adding either pipeline now would be a no-op surface that
-# rots until its producer lands.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -81,6 +92,24 @@ data:
               - replace_pattern(attributes["url.full"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.full"] != nil
               - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
               - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+              # Slice 18c: target the attribute the modern OTel Java
+              # agent actually emits. `http.url`/`http.target`/`url.full`
+              # are kept for defence-in-depth against older
+              # instrumentation.
+              - replace_pattern(attributes["url.path"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.path"] != nil
+              - replace_pattern(attributes["url.path"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
+              - replace_pattern(attributes["url.path"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
+
+      # Slice 18c FE-only gate. The OTLP/HTTP receiver carries logs from
+      # any source that POSTs to `/v1/logs`; today only the frontend SDK
+      # does (via the FE pod's nginx `/v1/` proxy), but the explicit
+      # drop here makes the boundary auditable and prevents accidental
+      # cross-pollination if a future slice adds a BE-via-OTLP path.
+      # Mirrors the compose collector's slice-7 filter exactly.
+      filter/frontend_only:
+        logs:
+          log_record:
+            - 'resource.attributes["service.name"] != "frontend"'
 
     extensions:
       # Bind explicitly to 0.0.0.0 — the contrib collector's
@@ -127,6 +156,28 @@ data:
         tls:
           insecure: true
 
+      # Slice 18c logs / metrics dual-write. OTLP/HTTP because the
+      # compose collector's `:4318` listener already accepts all three
+      # signal types from slices 5/6/7. The `+10000` offset on the obs
+      # exporters matches the traces convention and the
+      # `infra/lima/obs.yaml` portForward.
+      otlphttp/compose-relay-logs:
+        endpoint: http://host.lima.internal:4318
+        tls:
+          insecure: true
+      otlphttp/obs-cluster-logs:
+        endpoint: http://host.lima.internal:14318
+        tls:
+          insecure: true
+      otlphttp/compose-relay-metrics:
+        endpoint: http://host.lima.internal:4318
+        tls:
+          insecure: true
+      otlphttp/obs-cluster-metrics:
+        endpoint: http://host.lima.internal:14318
+        tls:
+          insecure: true
+
     service:
       extensions: [health_check]
       pipelines:
@@ -138,3 +189,19 @@ data:
           # retry/queue state), but the list is alphabetized for
           # stable diffs.
           exporters: [otlp/compose-relay, otlp/obs-cluster]
+        logs:
+          receivers: [otlp]
+          # `filter/frontend_only` runs LAST so the redaction pass
+          # observes records as the SDK emits them; the drop happens
+          # only after the auditable redaction has run.
+          processors: [batch, transform/redact-path-ids, filter/frontend_only]
+          exporters: [otlphttp/compose-relay-logs, otlphttp/obs-cluster-logs]
+        metrics:
+          receivers: [otlp]
+          # No path redaction on metrics: FE web-vitals attributes are
+          # web-vitals shaped (`route`, `metric.name`), and the
+          # source-side route-template labelling in
+          # `frontend/src/observability/route-timing.tsx` already
+          # collapses dynamic segments to placeholders.
+          processors: [batch]
+          exporters: [otlphttp/compose-relay-metrics, otlphttp/obs-cluster-metrics]

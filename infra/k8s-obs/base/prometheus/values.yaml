@@ -23,6 +23,16 @@ server:
   # zero) cardinality. Revisit alongside the slice 21 scrape configs
   # once we know the real storage rate.
   retention: "7d"
+  # Slice 18c: enable the remote-write receiver so the obs collector's
+  # `prometheusremotewrite/in-cluster` exporter has a destination at
+  # `POST /api/v1/write` on the chart-default prometheus-server
+  # Service. `web.enable-remote-write-receiver` is the modern flag
+  # name (pre-v2.33 docs reference `enable-feature=remote-write-receiver`;
+  # both work on v3.11.3 but the explicit web flag is clearer).
+  # `web.enable-lifecycle` is the chart default — keep it.
+  extraFlags:
+    - web.enable-lifecycle
+    - web.enable-remote-write-receiver
   resources:
     requests:
       memory: 256Mi

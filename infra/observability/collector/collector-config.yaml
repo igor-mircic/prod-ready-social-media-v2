@@ -1,5 +1,11 @@
 # OpenTelemetry Collector config for local-dev observability.
 #
+# The compose collector no longer receives browser OTLP directly — slice 18c
+# moved browser OTLP same-origin through the in-k3s frontend nginx (`/v1/`)
+# and the vite dev proxy. The app k3s collector now dual-writes to this
+# collector (the `compose-relay` exporter) for the side-by-side parity check
+# until slice 22 retires the compose path.
+#
 # Three pipelines:
 # - traces:  OTLP receiver  -> batch -> redact-path-ids -> Tempo (otlp/tempo exporter).
 # - metrics: OTLP receiver  -> batch -> drop_high_cardinality -> Prometheus exporter.
@@ -13,16 +19,17 @@
 # LOG_FILE_PATH before ./gradlew bootRun. The filelog receiver tails
 # that glob and the loki exporter pushes each line to Loki.
 #
-# Slice 5 (add-frontend-traces) adds:
-#   - CORS on the OTLP/HTTP receiver so the browser SDK can POST spans
-#     direct from the Vite dev/preview origins.
+# Slice 5 (add-frontend-traces) added:
 #   - A `transform/redact-path-ids` processor that replaces high-
 #     cardinality path segments (UUIDs, opaque hex, numeric ids) on
-#     both FE and BE spans before they reach Tempo.
+#     both FE and BE spans before they reach Tempo. Slice 18c
+#     additionally targets `url.path` (the attribute the modern Java
+#     agent emits) — the previous target list was a silent no-op for
+#     BE spans.
 #
-# Slice 6 (add-frontend-rum-metrics) adds:
+# Slice 6 (add-frontend-rum-metrics) added:
 #   - A `metrics` pipeline that receives FE OTLP metrics on the same
-#     `:4318` listener (CORS allowlist already covers `/v1/metrics`).
+#     `:4318` listener.
 #   - A `filter/drop_high_cardinality` processor that drops any data
 #     point whose `route` attribute contains an unredacted id —
 #     defence-in-depth alongside the source-side route-template
@@ -34,10 +41,9 @@
 #     `otelcol_web_vitals_lcp_milliseconds_bucket`) so dashboard
 #     PromQL stays readable.
 #
-# Slice 7 (add-frontend-errors) adds:
+# Slice 7 (add-frontend-errors) added:
 #   - A second `logs` pipeline receiving FE OTLP log records on the
-#     same `:4318` listener (CORS allowlist already covers `/v1/logs`
-#     via the catch-all `allowed_origins`).
+#     same `:4318` listener.
 #   - A `filter/frontend_only` processor that drops any log record
 #     whose `resource.service.name != "frontend"` — defence-in-depth
 #     so a future BE-via-OTLP migration doesn't accidentally route
@@ -59,17 +65,6 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
-        cors:
-          allowed_origins:
-            - http://localhost:5173
-            - http://localhost:4173
-            # Slice 16 (add-local-k3s-frontend): when the bundle is served
-            # by the in-k3s nginx via `just frontend-forward`, the browser
-            # origin is :13000. Without this entry the cross-origin OTLP
-            # POSTs (traces, logs, metrics) are blocked by preflight.
-            - http://localhost:13000
-          allowed_headers:
-            - "*"
 
   filelog:
     include:
@@ -134,6 +129,12 @@ processors:
           - replace_pattern(attributes["url.full"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.full"] != nil
           - replace_pattern(attributes["url.full"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
           - replace_pattern(attributes["url.full"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.full"] != nil
+          # Slice 18c: target the attribute the modern OTel Java agent
+          # actually emits. `http.url`/`http.target`/`url.full` are kept
+          # for defence-in-depth against older instrumentation.
+          - replace_pattern(attributes["url.path"], "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{id}") where attributes["url.path"] != nil
+          - replace_pattern(attributes["url.path"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
+          - replace_pattern(attributes["url.path"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
 
   # Slice 6 metric guard: drop any FE-emitted data point whose `route`
   # attribute looks like an unredacted id (UUID v4, opaque hex >= 8

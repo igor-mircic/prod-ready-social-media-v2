@@ -9,9 +9,10 @@ import {
   WebTracerProvider,
 } from '@opentelemetry/sdk-trace-web'
 
+import { resolveEndpointUrl } from './endpoint'
 import { frontendResource } from './resource'
 
-const DEFAULT_ENDPOINT = 'http://localhost:4318/v1/traces'
+const DEFAULT_ENDPOINT = '/v1/traces'
 const DEFAULT_BATCH_DELAY_MS = 500
 const DEV_BACKEND_ORIGIN = /^http:\/\/localhost:8080(\/.*)?$/
 
@@ -61,9 +62,10 @@ export function bootstrapTelemetry(): void {
   const provider = new WebTracerProvider({
     resource: frontendResource,
     spanProcessors: [
-      new BatchSpanProcessor(new OTLPTraceExporter({ url: endpoint }), {
-        scheduledDelayMillis,
-      }),
+      new BatchSpanProcessor(
+        new OTLPTraceExporter({ url: resolveEndpointUrl(endpoint) }),
+        { scheduledDelayMillis },
+      ),
     ],
   })
 
