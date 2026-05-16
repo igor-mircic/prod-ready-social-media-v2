@@ -42,8 +42,11 @@ Thumbs.db
 # Collector bind-mount target exists on a fresh clone.
 infra/observability/logs/*.json
 
-# `kustomize build --enable-helm` materialises the Bitnami chart under
-# `charts/` next to each kustomization that references it. The chart
-# is pinned by `version:` in the kustomization and re-fetched on each
-# render, so the cache directory is not tracked.
+# `kustomize build --enable-helm` materialises Helm charts under
+# `charts/` next to each kustomization that references them. The
+# charts are pinned by `version:` in the kustomization and re-fetched
+# on each render, so the cache directories are not tracked. Slice 17
+# (add-local-k3s-obs-cluster) adds a second tree at `infra/k8s-obs/`
+# with the same pattern.
 infra/k8s/**/charts/
+infra/k8s-obs/**/charts/

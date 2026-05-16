@@ -1,0 +1,45 @@
+# grafana/tempo chart values for slice 17
+# (add-local-k3s-obs-cluster). Chart pin: 1.24.4 (app tempo 2.9.0).
+#
+# Monolithic single-binary mode. Local backend on the singleBinary
+# PVC declared below. OTLP receivers enabled (gRPC + HTTP) even
+# though no spans arrive in this slice — slice 18
+# (add-k3s-app-collector) will point the app cluster's collector
+# at these receivers, and exposing them now means slice 18 has
+# nothing to change here.
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: local-path
+
+tempo:
+  storage:
+    trace:
+      # Local file system on the persistence volume declared above.
+      # No s3 / gcs — design.md Decision 4.
+      backend: local
+  # 72h retention. Traces are heavier per unit than metrics or
+  # logs, so the 5Gi PVC envelope buys less calendar time. Revisit
+  # alongside the slice 18 cross-cluster trace volume.
+  retention: 72h
+  # Enable OTLP receivers for the next slice's exporter. Empty maps
+  # mean "enable with chart defaults" (gRPC :4317, HTTP :4318).
+  # Both run inside the tempo container — no separate Service.
+  receivers:
+    otlp:
+      protocols:
+        grpc: {}
+        http: {}
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+# Prometheus Operator hook — disabled (design.md Decision 3, no
+# Operator in this slice).
+serviceMonitor:
+  enabled: false

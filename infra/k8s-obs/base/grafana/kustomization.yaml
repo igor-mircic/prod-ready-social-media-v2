@@ -1,0 +1,24 @@
+# Grafana workload — the grafana `grafana` chart wrapped by
+# Kustomize via the `helmCharts:` directive. Rendered with
+# `kustomize build --enable-helm` (the `just obs-apply` recipe
+# wraps the flag).
+#
+# A sibling plain-YAML resource (secret.yaml) rides along under
+# `resources:` so a single render produces the chart resources +
+# the admin-credential Secret in one stream.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+- name: grafana
+  repo: https://grafana.github.io/helm-charts
+  # Chart version pin. Resolved against the active grafana/grafana
+  # release at slice authoring (2026-05-16). Bumping is a
+  # deliberate edit to this file.
+  version: 10.5.15
+  releaseName: grafana
+  namespace: observability
+  valuesFile: values.yaml
+
+resources:
+- ./secret.yaml

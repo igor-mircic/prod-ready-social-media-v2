@@ -1,0 +1,91 @@
+# prometheus-community/prometheus chart values for slice 17
+# (add-local-k3s-obs-cluster). Chart pin: 29.6.0 (app v3.11.3).
+#
+# This is bare Prometheus — no Operator, no CRDs. Scrape configs
+# are an explicit empty list for this slice (no app data flowing
+# yet; configs land in slice 21 add-k3s-cluster-metrics). The
+# four bundled subcharts (alertmanager, pushgateway,
+# kube-state-metrics, prometheus-node-exporter) are all disabled:
+# alertmanager is its own top-level chart in this slice's tree;
+# kube-state-metrics / node-exporter are deferred to slice 21
+# along with the scrape targets that would consume them;
+# pushgateway is out of scope for this project's push model.
+
+server:
+  persistentVolume:
+    enabled: true
+    size: 5Gi
+    # k3s ships local-path-provisioner as the default StorageClass;
+    # pin it explicitly so a fresh cluster does not depend on the
+    # chart's auto-detection.
+    storageClass: local-path
+  # 7 days retention matches the 5Gi PVC envelope at our (currently
+  # zero) cardinality. Revisit alongside the slice 21 scrape configs
+  # once we know the real storage rate.
+  retention: "7d"
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+# Alertmanager is its own top-level chart in
+# infra/k8s-obs/base/alertmanager/. The prometheus chart's bundled
+# alertmanager subchart is explicitly disabled to avoid two
+# alertmanagers in the same namespace.
+alertmanager:
+  enabled: false
+
+# Out of scope this slice — the project's observability model is
+# push-only (app → obs), not pull-from-host metric submission.
+# Subchart name in the prometheus chart is `prometheus-pushgateway`
+# (matches the chart's `dependencies:` declaration).
+prometheus-pushgateway:
+  enabled: false
+
+# No scrape targets to enumerate yet. kube-state-metrics and
+# node-exporter both light up in slice 21 (add-k3s-cluster-metrics)
+# along with the kubelet / cAdvisor / apiserver scrape configs.
+kube-state-metrics:
+  enabled: false
+prometheus-node-exporter:
+  enabled: false
+
+# Scrape configs — every default job explicitly disabled. The
+# chart ships a `scrapeConfigs:` dictionary keyed by job name
+# (prometheus self-scrape, kubernetes-apiservers, kubernetes-nodes,
+# kubelet/cAdvisor, kubernetes-service-endpoints,
+# kubernetes-service-endpoints-slow, prometheus-pushgateway,
+# kubernetes-services, kubernetes-pods, kubernetes-pods-slow).
+# Helm's deep-merge means setting `scrapeConfigs: {}` only adds an
+# empty map ON TOP of the defaults — it does NOT wipe them. Each
+# default job has to be disabled by key, which is what the chart's
+# `{{- if $scrapeValue.enabled }}` template check honors.
+#
+# Slice 21 (add-k3s-cluster-metrics) replaces this with the
+# kubelet / cAdvisor / apiserver / node-exporter / kube-state-metrics
+# entries. Slice 18 (add-k3s-app-collector) may add the in-cluster
+# OTLP collector's prometheus receiver as a scrape target.
+scrapeConfigs:
+  prometheus:
+    enabled: false
+  kubernetes-api-servers:
+    enabled: false
+  kubernetes-nodes:
+    enabled: false
+  kubernetes-nodes-cadvisor:
+    enabled: false
+  kubernetes-service-endpoints:
+    enabled: false
+  kubernetes-service-endpoints-slow:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  kubernetes-services:
+    enabled: false
+  kubernetes-pods:
+    enabled: false
+  kubernetes-pods-slow:
+    enabled: false

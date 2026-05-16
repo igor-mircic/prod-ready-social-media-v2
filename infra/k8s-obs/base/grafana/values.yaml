@@ -1,0 +1,77 @@
+# grafana/grafana chart values for slice 17
+# (add-local-k3s-obs-cluster). Chart pin: 10.5.15 (app v12.3.1).
+#
+# Empty-stack posture: no datasources, no dashboards, no
+# sidecar-driven provisioning. The UI must load successfully and
+# the data sources list must be EMPTY — that is the spec scenario
+# this slice asserts. Datasources + dashboards land in slice 18
+# (add-k3s-app-collector) once data starts crossing the boundary.
+
+persistence:
+  enabled: true
+  size: 1Gi
+  # Grafana's chart uses `storageClassName` (not `storageClass`).
+  storageClassName: local-path
+
+# Credentials come from a separately-committed Secret
+# (./secret.yaml). The chart's auto-generated random secret path
+# is deliberately NOT used so the local-dev password is stable
+# across re-applies and documented in the README.
+adminUser: admin
+admin:
+  existingSecret: grafana-admin-credentials
+  userKey: admin-user
+  passwordKey: admin-password
+
+# Empty datasource provisioning — the spec scenario "no datasources
+# are pre-configured" depends on this. Slice 18 will set
+# `datasources.datasources.yaml.datasources:` with the obs cluster's
+# in-namespace Prometheus / Loki / Tempo endpoints.
+datasources: {}
+
+# Empty dashboard provisioning — same rationale as datasources.
+dashboardProviders: {}
+dashboards: {}
+
+# Both sidecars OFF. The chart's sidecar containers watch
+# ConfigMaps / Secrets labeled `grafana_datasource` / `grafana_dashboard`
+# in the namespace and live-load them. We rely on values-driven
+# provisioning instead so every datasource/dashboard the obs
+# cluster carries is visible in git, not synthesised at apply time.
+sidecar:
+  datasources:
+    enabled: false
+  dashboards:
+    enabled: false
+
+# ClusterIP — port-forward only. LoadBalancer was considered and
+# rejected (design.md Decision 5 / Open Question 5): the obs stack
+# is not always running, so on-demand port-forwarding fits its
+# posture better than always-bound host ports. The
+# `just obs-grafana` recipe wraps the port-forward.
+service:
+  type: ClusterIP
+
+# Login required everywhere — both local AND hetzner overlays
+# (design.md Open Question 3). Anonymous-viewer mode in local is
+# tempting for dev iteration but introduces a habit that does not
+# survive to a public-facing Hetzner deployment.
+grafana.ini:
+  auth.anonymous:
+    enabled: false
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 50m
+  limits:
+    memory: 512Mi
+    cpu: 500m
+
+# Disable the chart's bats-based test pod. `kustomize build` emits
+# every resource — including those tagged with `helm.sh/hook: test`
+# — and a `kubectl apply` would create the bats Pod alongside the
+# Deployment. We do not run helm-test in this slice, so the Pod
+# would sit Pending or run a one-shot test we did not invoke.
+testFramework:
+  enabled: false

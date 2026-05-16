@@ -1,0 +1,22 @@
+# Alertmanager workload — the prometheus-community `alertmanager`
+# chart wrapped by Kustomize via the `helmCharts:` directive.
+# Rendered with `kustomize build --enable-helm` (the
+# `just obs-apply` recipe wraps the flag).
+#
+# Top-level chart (NOT the alertmanager bundled inside the
+# prometheus chart, which is disabled in
+# infra/k8s-obs/base/prometheus/values.yaml). Single Alertmanager
+# instance per cluster, owned here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+- name: alertmanager
+  repo: https://prometheus-community.github.io/helm-charts
+  # Chart version pin. Resolved against the active
+  # prometheus-community release at slice authoring (2026-05-16).
+  # Bumping is a deliberate edit to this file.
+  version: 1.36.0
+  releaseName: alertmanager
+  namespace: observability
+  valuesFile: values.yaml

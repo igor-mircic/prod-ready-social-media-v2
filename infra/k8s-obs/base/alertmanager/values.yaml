@@ -1,0 +1,38 @@
+# prometheus-community/alertmanager chart values for slice 17
+# (add-local-k3s-obs-cluster). Chart pin: 1.36.0 (app v0.32.1).
+#
+# Minimal "drop everything" configuration. No real alerting in this
+# slice — the receivers wire up in slice 22 (retire-compose-
+# observability) when the compose-side alertmanager rules migrate
+# over. Until then, the alertmanager is stood up empty so the API
+# is reachable (the spec asserts `/-/healthy` returns 200) without
+# any alert ever firing into an unconfigured receiver.
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: local-path
+
+# Minimal config: one receiver named `null` that drops everything;
+# the route sends every alert to it. Effectively a black hole.
+# Slice 22 replaces this with the real receiver layout (webhook
+# sink, alert ratelimits, inhibit rules) migrated from
+# infra/observability/alertmanager/alertmanager.yml.
+config:
+  route:
+    receiver: 'null'
+  receivers:
+  - name: 'null'
+
+resources:
+  requests:
+    memory: 64Mi
+    cpu: 25m
+  limits:
+    memory: 256Mi
+    cpu: 250m
+
+# Prometheus Operator hook — disabled (design.md Decision 3, no
+# Operator in this slice).
+serviceMonitor:
+  enabled: false

@@ -1,0 +1,23 @@
+# Prometheus workload — the prometheus-community `prometheus` chart
+# wrapped by Kustomize via the `helmCharts:` directive. Rendered
+# with `kustomize build --enable-helm` (the `just obs-apply` recipe
+# wraps the flag).
+#
+# Deliberately NOT `kube-prometheus-stack`. This slice deploys bare
+# Prometheus (no Operator, no CRDs); see
+# openspec/changes/add-local-k3s-obs-cluster/design.md Decision 3
+# for the rationale. Scrape configs are owned in values.yaml as
+# plain YAML, not via ServiceMonitor / PodMonitor CRDs.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+- name: prometheus
+  repo: https://prometheus-community.github.io/helm-charts
+  # Chart version pin. Resolved against the active
+  # prometheus-community release at slice authoring (2026-05-16).
+  # Bumping is a deliberate edit to this file.
+  version: 29.6.0
+  releaseName: prometheus
+  namespace: observability
+  valuesFile: values.yaml
