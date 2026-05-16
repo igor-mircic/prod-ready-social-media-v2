@@ -15,6 +15,11 @@
 # backend-image`) picks up new content without a digest swap. The
 # Hetzner overlay deliberately does NOT patch this — production
 # deploys pin by digest and rely on the default `IfNotPresent`.
+#
+# Slice 16 (add-local-k3s-frontend): the frontend container's
+# `imagePullPolicy` gets the same `Always` patch for the same reason
+# — `just frontend-image` repushes the floating `:dev` tag, and
+# `frontend-rebuild` would otherwise hit the stale cached layer.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -35,4 +40,18 @@ patches:
           spec:
             containers:
               - name: backend
+                imagePullPolicy: Always
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: frontend
+      spec:
+        template:
+          spec:
+            containers:
+              - name: frontend
                 imagePullPolicy: Always

@@ -163,15 +163,98 @@ backend's `localhost:4318` default is unchanged.
 
 The k3s backend Service is `ClusterIP` only — no Ingress, no LoadBalancer.
 The Traefik-vs-ingress-nginx decision deferred in slice 14 stays deferred;
-the slice that introduces the *frontend* in k3s (or a dedicated ingress
-slice) lands it. For now `kubectl port-forward` to `:18080` is enough — the
-deliberate non-collision with the host backend's `:8080` lets both run
-side-by-side.
+a future `add-cluster-ingress` slice lands it. For now `kubectl port-forward`
+to `:18080` is enough — the deliberate non-collision with the host backend's
+`:8080` lets both run side-by-side.
+
+### Run the frontend in cluster (optional)
+
+Slice `add-local-k3s-frontend` adds a **side-channel** path for running the
+Vite + React frontend inside the local k3s cluster as a Deployment. This is
+purely opt-in: the canonical dev loop is still `pnpm dev` (Vite's dev server
+on `:5173`), and the e2e Playwright harness still targets the host
+`vite preview` on `:4173`. IDE run configurations are unchanged. Nothing in
+CI exercises the k3s deploy.
+
+The four-recipe flow:
+
+```sh
+just frontend-image     # build + push: docker build → docker push 127.0.0.1:5000/frontend:dev
+just frontend-apply     # apply local overlay, block on rollout-status
+just frontend-forward   # port-forward svc/frontend 13000:80 (separate terminal)
+just frontend-logs      # tail pod logs (separate terminal)
+```
+
+`just frontend-rebuild` chains `frontend-image` + `frontend-apply` for the
+95% iteration path. `just frontend-delete` tears down Deployment + Service
+by the `app.kubernetes.io/name=frontend` label (backend, postgres, and
+registry untouched).
+
+Open `http://localhost:13000/` once the port-forward is up. Same-origin
+`/api/*` calls hit the in-cluster backend through the pod-local nginx
+reverse-proxy (no CORS preflight, no cookie-scope games).
+
+**Same-origin reverse-proxy — by design.** The pod runs `nginx-unprivileged`
+on `:8080`. A single `server` block ships three location rules:
+
+- `/api/`      → `proxy_pass http://backend.social.svc.cluster.local:8080;`
+- `/actuator/` → same upstream
+- `/`          → `try_files $uri $uri/ /index.html;` (SPA fallback so deep-links work)
+
+The browser sees a single origin (`http://localhost:13000` via the
+port-forward); nginx-in-pod proxies API calls to the in-cluster backend
+Service. The result: cookies set by `/api/v1/auth/login` are visible on
+`/api/v1/me` without `SameSite=None` workarounds, and there are no
+`Access-Control-Allow-*` headers to configure. The Hetzner overlay aims for
+the same shape via Ingress + DNS, so the local overlay is a faithful
+rehearsal.
+
+**Strict pairing with the in-k3s backend.** nginx's upstream resolves to the
+in-cluster backend Service. If you apply the frontend without the backend,
+`/api/*` and `/actuator/*` calls return HTTP 502 because the backend Service
+has no endpoints — by design, not a bug. Diagnose with:
+
+```sh
+kubectl get endpoints backend -n social
+# Empty ENDPOINTS column → run `just backend-apply` first.
+```
+
+There is no host-loop fallback (no `host.lima.internal:8080` swap in the
+local overlay). The reasons live in `openspec/changes/add-local-k3s-frontend/design.md`
+Decision 5.
+
+**Build-time Vite env baking — transitional choice.** The image freezes
+three Vite env vars at build time:
+
+- `VITE_API_BASE_URL=''` — empty so the browser hits same-origin (`/api/*`
+  resolves to whatever loaded the bundle).
+- `VITE_OTEL_ENABLED='true'` — browser OTel stays on.
+- `VITE_OTEL_TRACES_ENDPOINT='http://localhost:4318'` — the *browser* runs
+  on macOS and reaches the host's OTel Collector directly. Identical to the
+  `pnpm dev` transport.
+
+Each environment that needs different URLs gets its own image build (the
+Hetzner overlay rebuilds with production values via `--build-arg`). The
+`/config.js` runtime-injection pattern that would remove this rebuild step
+is captured as a follow-up spike in design.md "Open Questions".
+
+**Build context is the repo root.** `frontend/orval.config.ts` references
+`../openapi/openapi.json` for client generation, so `just frontend-image`
+runs `docker build -f frontend/Dockerfile -t 127.0.0.1:5000/frontend:dev .`
+from the repo root. `frontend/.dockerignore` exists for `frontend/`-scoped
+context users; the active ignore file is the repo-root `.dockerignore`.
+
+**Registry hostname asymmetry.** The frontend reuses slice 15's three-name
+plumbing unchanged (`127.0.0.1:5000` push, `registry.local:5000` in manifests,
+`host.lima.internal:5000` from the VM via mirror rewrite). See "Run the
+backend in cluster (optional)" above for the full explanation; no new
+asymmetry is introduced here.
 
 ### Non-goals (in this slice)
 
-- **The frontend is NOT yet in k3s.** It still runs on the host (`pnpm dev`,
-  Vite preview, the Playwright harness's bundled preview server).
+- **No Ingress; access is via `kubectl port-forward`.** The Traefik-vs-
+  ingress-nginx decision stays deferred and is rolled forward to a dedicated
+  `add-cluster-ingress` slice.
 - **The observability stack is NOT yet in k3s.** Prometheus, Grafana, Tempo,
   Loki, the OTel Collector, Alertmanager, the webhook sink, `postgres-exporter`,
   and cAdvisor continue to run under `docker-compose --profile observability`.

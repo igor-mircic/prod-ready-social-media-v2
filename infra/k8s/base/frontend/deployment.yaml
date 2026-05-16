@@ -1,0 +1,72 @@
+# Frontend Deployment — one replica, in the `social` namespace
+# (inherited from `infra/k8s/base/kustomization.yaml`'s `namespace:`).
+#
+# Image: `registry.local:5000/frontend:dev`. The hostname is the k3s
+# containerd-side alias; the registry's host-side bind is
+# `127.0.0.1:5000` and the cluster reaches it via the
+# `registries.yaml` mirror rewrite to `http://host.lima.internal:5000`.
+# See README's "Run the backend in cluster (optional)" for the full
+# picture; the frontend reuses slice 15's plumbing unchanged.
+#
+# The pod runs nginxinc/nginx-unprivileged:1.27-alpine (chosen by the
+# slice's `frontend/Dockerfile` runtime stage). It listens on :8080
+# as uid 101 — no elevated capabilities required, which keeps the
+# pod compliant with restricted Pod Security Standards.
+#
+# Probes (design.md Decision 10):
+#   - livenessProbe: HTTP GET / on port 8080. The 5s initial delay
+#     is enough for `nginx -g 'daemon off;'` to bind the listener.
+#   - readinessProbe: HTTP GET / on port 8080. Marks the pod Ready
+#     as soon as nginx responds.
+#   - No startupProbe — nginx is up in under one second; the
+#     liveness initialDelaySeconds covers the cold start.
+#
+# Resources (design.md Decision 10): nginx idles at ~5 MiB resident
+# with a handful of workers; the 128Mi ceiling is comfortable. Numbers
+# transfer 1:1 to the CAX21 Hetzner envelope.
+#
+# Image pull policy is intentionally NOT set here — the local overlay
+# patches it to `Always` so iterating on the floating `:dev` tag picks
+# up new pushes; the hetzner overlay (future) will keep the default
+# `IfNotPresent` and pin by digest.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: registry.local:5000/frontend:dev
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
