@@ -123,9 +123,9 @@ The repo-root `justfile` SHALL declare two recipes covering the in-cluster colle
 
 ## MODIFIED Requirements
 
-### Requirement: The backend pod sends OTLP to the in-cluster collector
+### Requirement: The backend pod sends OTLP to the host-side collector
 
-The backend Deployment SHALL set `OTEL_EXPORTER_OTLP_ENDPOINT` to `http://collector.social.svc.cluster.local:4318` so the in-cluster backend's OTel agent reaches the in-cluster OpenTelemetry Collector pod (NOT the compose collector via the VM-host alias). The in-cluster collector relays traces to the compose collector for the duration of the transition; the eventual `bridge-collectors-to-obs-cluster` slice replaces the collector's exporter target without touching the backend.
+The backend Deployment SHALL set `OTEL_EXPORTER_OTLP_ENDPOINT` to `http://collector.social.svc.cluster.local:4318` so the in-cluster backend's OTel agent reaches the in-cluster OpenTelemetry Collector pod (NOT the compose collector via the VM-host alias). The in-cluster collector relays traces to the compose collector for the duration of the transition; the eventual `bridge-collectors-to-obs-cluster` slice replaces the collector's exporter target without touching the backend. (The requirement title is retained from slice 15 for spec-delta header continuity; the requirement's intent is now an in-cluster collector target.)
 
 #### Scenario: Deployment sets the OTLP endpoint to the in-cluster Service FQDN
 - **WHEN** a reader inspects `infra/k8s/base/backend/deployment.yaml`
