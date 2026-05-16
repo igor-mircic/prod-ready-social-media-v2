@@ -1,0 +1,108 @@
+# grafana/loki chart values for slice 17 (add-local-k3s-obs-cluster).
+# Chart pin: 7.0.0 (app loki 3.6.7).
+#
+# SingleBinary monolithic mode — single-replica, single-PVC,
+# filesystem storage. No object storage, no memcached, no gateway,
+# no Prometheus Operator monitoring hooks. The data plane is empty
+# in this slice; slice 20 (add-k3s-pod-log-shipping) populates it.
+
+deploymentMode: SingleBinary
+
+loki:
+  commonConfig:
+    replication_factor: 1
+  # Filesystem storage on the singleBinary PVC declared below. No
+  # s3 / gcs / azure backend — design.md Decision 4 ("no object
+  # storage for the local cluster").
+  storage:
+    type: filesystem
+  # Modern TSDB schema. Single schema entry suffices for a fresh
+  # data plane; future schema bumps are append-only.
+  schemaConfig:
+    configs:
+    - from: "2024-04-01"
+      object_store: filesystem
+      store: tsdb
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+  # Disable in-process auth so the in-cluster receivers (loki's HTTP
+  # API and the future OTLP push from the app cluster's collector
+  # in slice 20) do not need bearer tokens against an empty backend.
+  # Cross-cluster auth (mTLS) is a dedicated slice (slice 19,
+  # add-cross-cluster-mtls); this slice deliberately starts with
+  # no auth so the cross-cluster shape can be exercised in slice 20
+  # before mTLS lands.
+  auth_enabled: false
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: local-path
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+
+# Chart 7.0.0's validation template refuses to apply if both the
+# SingleBinary and SimpleScalable targets have replicas > 0
+# simultaneously. The chart defaults the SimpleScalable
+# write/read/backend Deployments to non-zero replicas regardless
+# of `deploymentMode`, so we zero them out explicitly to keep the
+# validation happy.
+write:
+  replicas: 0
+read:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Memcached caches are unnecessary at single-node monolithic scale
+# and would add two extra workloads with no observable benefit at
+# zero throughput.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Gateway (nginx in front of loki's HTTP API) is disabled — no
+# Ingress in this slice; the future OTLP push from the app
+# cluster's collector lands directly on the loki Service in slice
+# 20. Re-enable if/when a public-facing endpoint is needed.
+gateway:
+  enabled: false
+
+# Every `monitoring.*` knob below assumes the Prometheus Operator
+# CRDs (ServiceMonitor, PrometheusRule, etc.) we are deliberately
+# NOT installing — design.md Decision 3. Turn them all off so the
+# chart does not render CRD-typed resources that the cluster has
+# no controller to reconcile.
+monitoring:
+  dashboards:
+    enabled: false
+  rules:
+    enabled: false
+  serviceMonitor:
+    enabled: false
+  selfMonitoring:
+    enabled: false
+
+# Disabled — the canary writes synthetic log lines and reads them
+# back to verify Loki is healthy. Useful at scale, noise here:
+# every iteration would write canary lines into the empty data
+# plane this slice deliberately stands up. Re-enable in a later
+# slice if/when synthetic health probes are needed.
+lokiCanary:
+  enabled: false
+
+# The chart's bundled `test-pod` Pod hits a live receiver; we have
+# none in this slice. Disabling test avoids a failing helm test
+# attempt on apply.
+test:
+  enabled: false

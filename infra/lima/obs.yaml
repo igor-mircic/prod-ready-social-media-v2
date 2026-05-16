@@ -1,0 +1,163 @@
+# Lima VM definition for the project's local observability k3s
+# cluster. Slice 17 (add-local-k3s-obs-cluster) — the local mirror
+# of the two-cluster fate-separation pattern that the Hetzner deploy
+# will eventually take: app workloads on one box, observability on
+# another. See openspec/changes/add-local-k3s-obs-cluster/design.md
+# for the rationale (Decision 1 — Two Lima VMs, two k3s clusters).
+#
+# Shape matches the app VM (infra/lima/lima.yaml) 1:1 — 4 vCPU,
+# 8 GiB RAM, arm64, Ubuntu 24.04 LTS, 64 GiB disk — so workload
+# behavior observed locally transfers to the eventual second
+# Hetzner box.
+#
+# Provisioning: the `provision:` block invokes the same shared
+# `infra/provisioning/install-k3s.sh` script that the app VM uses,
+# unchanged. This slice is the script's second consumer and
+# validates its host-agnostic invariant. No k3s install logic is
+# duplicated inline here.
+#
+# Host-facing context name: `social-obs` (NOT the app VM's
+# `lima-social`). Two contexts coexist in ~/.kube/config so an
+# operator can run `kubectl --context lima-social ...` and
+# `kubectl --context social-obs ...` side-by-side without state
+# bleed. The naming convention is `social-<role>` so future
+# clusters extend predictably (social-staging, social-prod-app,
+# social-prod-obs).
+#
+# Host port mappings:
+#   localhost:16444 → kube-apiserver. The app VM's apiserver lands
+#                     at :16443 and lima-social's hostagent
+#                     ALSO auto-forwards the in-VM k3s kube-
+#                     scheduler from guest 127.0.0.1:6444 to host
+#                     :6444 — Lima's default is to forward every
+#                     127.0.0.1 listener to the same-numbered host
+#                     port. So :6444 is already claimed by the app
+#                     VM and the obs VM gets :16444 instead
+#                     (symmetric with :16443). The port is
+#                     non-default-k3s (:6443) by design so it does
+#                     NOT collide with Docker Desktop's
+#                     `kubernetes-admin@kubernetes` context (which
+#                     serves on :6443 on macOS).
+#
+# No other forwards are declared in this slice. Grafana, Prometheus,
+# Loki, Tempo, and Alertmanager are reached via on-demand
+# `kubectl port-forward` (driven by the `just obs-grafana` recipe
+# and the verification port-forwards in tasks 9.5–9.7). Adding a
+# klipper-lb LoadBalancer Service for grafana was considered and
+# rejected (design.md Decision 5 / Open Question 5) — the obs stack
+# is not always running, so on-demand port-forwarding fits its
+# posture better than always-bound host ports.
+#
+# We opt the obs VM OUT of Lima's default "forward every guest
+# 127.0.0.1 listener to the same host port" via a catch-all
+# `ignore: true` rule below. Without it Lima emits noisy
+# "address already in use" warnings on every kubelet / kube-
+# scheduler / kube-controller-manager port that the app VM has
+# already claimed; with it we declare what crosses the boundary
+# explicitly.
+#
+# Bring up with `just obs-up` (which wraps
+# `limactl start --name=social-obs infra/lima/obs.yaml`).
+
+arch: aarch64
+cpus: 4
+memory: "8GiB"
+disk: "64GiB"
+
+# Pinned Ubuntu 24.04 LTS (Noble) cloud image. Same explicit
+# release date as infra/lima/lima.yaml — bumps happen deliberately
+# in both files together so the two VMs never drift onto different
+# kernels.
+images:
+- location: "https://cloud-images.ubuntu.com/releases/noble/release-20260321/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+
+# Lima mounts the macOS user's home directory at the same absolute
+# path inside the VM (so /Users/<you> on the host == /Users/<you> in
+# the guest). The provision script below relies on that to locate
+# infra/provisioning/install-k3s.sh in the cloned repo.
+mounts:
+- location: "~"
+  writable: false
+
+# Host port forwards. The obs cluster only surfaces its apiserver
+# host-side; everything else is reached through on-demand
+# `kubectl port-forward` (see justfile `obs-grafana` and the
+# spec's verification port-forwards). Pull-mode discovery from the
+# app cluster (e.g. obs-cluster scrapes app-cluster pods) is
+# explicitly rejected — design.md Decision 6 — so no app-cluster-
+# facing Service ports are surfaced here either.
+portForwards:
+# k3s kube-apiserver. Published on :16444 host-side so the obs VM
+# does NOT collide with anything lima-social already auto-forwards
+# from its guest side (kube-scheduler on guest 6444 in particular).
+# 16444 is symmetric with the app cluster's :16443. The host-side
+# port is non-default-k3s by design: Docker Desktop on macOS uses
+# :6443 for its conventional `kubernetes-admin@kubernetes` context.
+- guestPort: 6443
+  hostPort: 16444
+# Catch-all: every other 127.0.0.1 listener inside the obs VM is
+# NOT exposed on the host. The two LGTM stacks are reached via
+# `kubectl port-forward` against the in-cluster Services rather
+# than via host port forwards. This avoids the noisy "address
+# already in use" warnings Lima emits when both VMs try to claim
+# the same kubelet / kube-proxy / kube-scheduler ports on the host.
+- guestPortRange: [1, 65535]
+  ignore: true
+
+provision:
+# Step 1 — invoke the shared k3s install script on first boot. The
+# script lives at infra/provisioning/install-k3s.sh and is host-
+# agnostic (it MUST NOT depend on Lima); the same script will run
+# as Hetzner cloud-init userdata in a future slice. No k3s install
+# logic is duplicated inline here.
+#
+# This invocation pattern is byte-identical to the app VM's
+# (infra/lima/lima.yaml) — find the repo-mounted script on the
+# host-mirrored filesystem, fail loudly if missing, otherwise run
+# it as-is. Any future change to the install script affects both
+# clusters identically.
+- mode: system
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SCRIPT=$(find / -path '*/infra/provisioning/install-k3s.sh' -print -quit 2>/dev/null || true)
+    if [ -z "$SCRIPT" ] || [ ! -f "$SCRIPT" ]; then
+      echo "FATAL: could not locate infra/provisioning/install-k3s.sh under the mounted host filesystem." >&2
+      echo "       Lima mounts the macOS user's home at the same absolute path inside the VM; check that" >&2
+      echo "       this file is committed at infra/provisioning/install-k3s.sh in the repo and that the" >&2
+      echo "       repo lives somewhere under your home directory."                                     >&2
+      exit 1
+    fi
+    bash "$SCRIPT"
+
+# Step 2 — produce a host-friendly kubeconfig at /tmp/kubeconfig-
+# social-obs.yaml. The k3s.yaml the installer writes points at
+# https://127.0.0.1:6443 with context `default`. Rewrite to
+# https://127.0.0.1:6444 (the host-mapped port from portForwards
+# above) and rename the context to `social-obs` so it can drop
+# into ~/.kube/config alongside the app VM's `lima-social` context
+# without conflict. This step is Lima-specific by design — it
+# depends on the portForwards layout this file declares — and so
+# lives here, NOT in the shared install script.
+- mode: system
+  script: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+    install -m 0644 /etc/rancher/k3s/k3s.yaml /tmp/kubeconfig-social-obs.yaml
+    sed -i \
+      -e 's#https://127.0.0.1:6443#https://127.0.0.1:16444#g' \
+      -e 's#name: default#name: social-obs#g' \
+      -e 's#cluster: default#cluster: social-obs#g' \
+      -e 's#user: default#user: social-obs#g' \
+      -e 's#current-context: default#current-context: social-obs#g' \
+      /tmp/kubeconfig-social-obs.yaml
+
+# Surface the rewritten kubeconfig on the host. `{{.Dir}}` resolves
+# to the per-instance Lima dir (`~/.lima/social-obs/`); the host
+# operator can either point KUBECONFIG at this path directly or
+# merge it into ~/.kube/config via `kubectl config view --flatten`.
+copyToHost:
+- guest: "/tmp/kubeconfig-social-obs.yaml"
+  host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+  deleteOnStop: true

@@ -1,0 +1,20 @@
+# Local overlay — targets the Lima-hosted observability k3s cluster
+# (the `social-obs` context). Slice 17 (add-local-k3s-obs-cluster).
+#
+# Inherits everything from ../../base. Local-specific patches would
+# go here. The slice's PVC sizes (prometheus/loki/tempo 5Gi, grafana
+# and alertmanager 1Gi), storage class (local-path), and resource
+# caps are already declared at the per-component values.yaml files
+# under base/; they match local-dev intent today, so this overlay
+# carries no per-component override patches. If/when the base
+# values tighten to production-realistic shapes (larger PVCs,
+# bigger retention windows, dedicated storage classes), this
+# overlay is where the laptop-scaled-down counterpatches will land.
+#
+# Apply path: `just obs-apply` wraps
+# `kustomize build --enable-helm infra/k8s-obs/overlays/local | kubectl --context social-obs apply -f -`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base

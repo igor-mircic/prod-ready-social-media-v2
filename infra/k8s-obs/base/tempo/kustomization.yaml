@@ -1,0 +1,22 @@
+# Tempo workload — the grafana `tempo` (monolithic) chart wrapped
+# by Kustomize via the `helmCharts:` directive. Rendered with
+# `kustomize build --enable-helm` (the `just obs-apply` recipe
+# wraps the flag).
+#
+# This is the monolithic `tempo` chart, NOT `tempo-distributed`.
+# Single-node, single-PVC, local backend. The distributed chart
+# splits ingester / distributor / querier / compactor — useful at
+# scale, opaque at learning intent (design.md Decision 3).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+- name: tempo
+  repo: https://grafana.github.io/helm-charts
+  # Chart version pin. Resolved against the active grafana/tempo
+  # release at slice authoring (2026-05-16). Bumping is a
+  # deliberate edit to this file.
+  version: 1.24.4
+  releaseName: tempo
+  namespace: observability
+  valuesFile: values.yaml

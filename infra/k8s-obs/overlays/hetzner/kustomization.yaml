@@ -1,0 +1,60 @@
+# Hetzner overlay — PLACEHOLDER for the eventual add-hetzner-deploy
+# slice (slice 23 in the arc planned by slice 17's design.md).
+#
+# TODO (add-hetzner-deploy): this overlay will fill in the
+# production-grade counterparts of the base LGTM resources for
+# the second Hetzner box (the dedicated observability host —
+# likely a CPX11 or CAX11 SKU, smaller than the app cluster's
+# CAX21). Items the slice will add, in roughly the order it will
+# resolve them:
+#
+#   - Secret strategy. The base grafana Secret committed under
+#     infra/k8s-obs/base/grafana/secret.yaml is a LOCAL-DEV
+#     credential (the value is marked with the
+#     `social.io/credential-scope: local-dev` label). It MUST NOT
+#     be reused on this overlay path. The slice will either remove
+#     the base secret and add a Hetzner-specific one, or replace
+#     it via a strategic-merge patch that points the grafana chart
+#     at a different `admin.existingSecret` name. The chosen
+#     strategy (SOPS-encrypted-at-rest in-repo, Sealed Secrets
+#     controller, or imperative kubectl-from-password-manager) is
+#     the slice's first open question.
+#
+#   - Ingress + TLS for grafana. Local overlay reaches grafana via
+#     `just obs-grafana` (kubectl port-forward); the Hetzner box
+#     needs a publicly-reachable hostname. cert-manager + Let's
+#     Encrypt (HTTP-01 on Traefik, the k3s default Ingress
+#     controller) is the leading approach. The future
+#     `add-cluster-ingress` slice (if it lands before
+#     add-hetzner-deploy) settles the Traefik-vs-ingress-nginx
+#     question; this overlay's Ingress resource(s) follow that
+#     decision.
+#
+#   - Storage sizing for the production obs box. Base PVCs
+#     (prometheus 5Gi, loki 5Gi, tempo 5Gi, grafana 1Gi,
+#     alertmanager 1Gi, total 17 Gi) fit the local 64 Gi VM disk.
+#     The Hetzner obs box's disk envelope (CPX11 ~ 40 Gi, CAX11 ~
+#     40 Gi) is similar but the retention windows the slice will
+#     declare (per-component) drive the actual sizing; numbers
+#     measured on observed steady-state usage, not guessed here.
+#
+#   - Anti-affinity / topology constraints if and when the obs
+#     cluster grows beyond one node. Single-node by design today
+#     — same posture as the app cluster — so this is a future-only
+#     item, captured for symmetry with the app cluster's Hetzner
+#     overlay (which also notes it).
+#
+#   - Retention tuning. Base values use chart defaults (or short
+#     windows: prometheus 7d, tempo 72h). Production retention is
+#     a downstream slice's decision; the slice will land explicit
+#     retention configs alongside the storage sizing.
+#
+# Apply path is intentionally NOT wired into the justfile in this
+# slice. `just obs-apply` targets overlays/local only. The slice
+# that adds Hetzner deploy will add a separate `obs-apply-hetzner`
+# (or merge the two via a context-aware variable).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base

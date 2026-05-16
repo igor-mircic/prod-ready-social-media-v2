@@ -1,0 +1,33 @@
+# Base Kustomize entry point for the observability cluster. Slice 17
+# (add-local-k3s-obs-cluster) — mirrors the app cluster's
+# `infra/k8s/base/` layout. Convention:
+#
+#   - Single namespace (`observability`) — declared here as both a
+#     Namespace resource (so `kubectl apply` creates it) and as a
+#     `namespace:` directive (so every nested chart-rendered
+#     resource lands in it automatically). All LGTM components
+#     share one namespace; nothing in this slice is split across
+#     namespace boundaries.
+#   - Per-component charts nest under `base/<component>/` as their
+#     own Kustomize directories with a `helmCharts:` directive and
+#     a sibling `values.yaml`. They are listed below under
+#     `resources:`; new components are added by creating a new
+#     subdirectory and appending a `./<component>` entry here.
+#   - Overlays under infra/k8s-obs/overlays/{local,hetzner}
+#     reference this base via `../../base` and apply environment-
+#     specific patches without forking the per-component shapes.
+#   - kube-prometheus-stack is deliberately NOT used — each LGTM
+#     component is a separate chart so every byte of observability
+#     behavior is visible in the repo (design.md Decision 3).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: observability
+
+resources:
+- ./namespace.yaml
+- ./prometheus
+- ./loki
+- ./tempo
+- ./grafana
+- ./alertmanager

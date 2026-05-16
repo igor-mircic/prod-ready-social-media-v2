@@ -20,6 +20,17 @@ PG_LABEL := "app.kubernetes.io/name=postgresql"
 PG_NAMESPACE := "social"
 PG_URL := "postgres://social:social@localhost:5432/social"
 
+# Slice 17 (add-local-k3s-obs-cluster) — observability cluster
+# variables. The obs cluster lives in a SECOND Lima VM (`social-
+# obs`) with its own kubeconfig context (`social-obs`) and its
+# own kustomize tree (`infra/k8s-obs/`). See README "Local
+# observability cluster" for the dev loop these recipes drive.
+OBS_VM_NAME := "social-obs"
+OBS_LIMA_YAML := "infra/lima/obs.yaml"
+OBS_LOCAL_OVERLAY := "infra/k8s-obs/overlays/local"
+OBS_CONTEXT := "social-obs"
+OBS_NAMESPACE := "observability"
+
 # Default recipe: print the verb surface with its inline descriptions.
 default:
     @just --list
@@ -196,3 +207,84 @@ frontend-delete:
 
 # Rebuild the image + apply in one shot (the 95% path).
 frontend-rebuild: frontend-image frontend-apply
+
+# === Slice 17 (add-local-k3s-obs-cluster) — observability cluster
+# verbs. ===
+#
+# These recipes drive the SECOND Lima VM (`social-obs`) that hosts
+# the in-cluster LGTM stack (Prometheus, Loki, Tempo, Grafana,
+# Alertmanager). The app cluster (`lima-social`) and its workloads
+# are unaffected; the host docker-compose observability stack
+# continues to receive app telemetry on port 4318 — see README
+# "Local observability cluster" for the full rationale (two-cluster
+# fate-separation pattern, mirrors the future Hetzner two-box
+# deploy) and the dev loop these recipes drive.
+#
+# Common-vs-app-cluster differences to remember:
+#   - VM name:    `social-obs`     (app cluster: `lima-social`)
+#   - Context:    `social-obs`     (app cluster: `lima-social`)
+#   - apiserver:  localhost:6444   (app cluster: localhost:16443)
+#   - Namespace:  `observability`  (app cluster: `social`)
+#   - Tree:       infra/k8s-obs/   (app cluster: infra/k8s/)
+#
+# The obs cluster has NO data flowing in yet — that lands in slice
+# 18 (add-k3s-app-collector). Grafana stands up with an empty data
+# sources list; this is the expected end state for slice 17.
+
+# Boot the obs Lima VM (idempotent — first boot runs the shared
+# install-k3s.sh script, subsequent runs are a stop/start). Blocks
+# until the VM reaches Ready. Mirrors the app cluster's `vm-up`.
+obs-up:
+    limactl start --name={{OBS_VM_NAME}} {{OBS_LIMA_YAML}}
+
+# Stop the obs Lima VM. The on-disk image is preserved (PVC
+# contents survive); `just obs-up` resumes from the same state. Do
+# NOT auto-delete the VM. Pair with `just vm-down` to fully stop
+# both clusters when not actively working.
+obs-down:
+    limactl stop {{OBS_VM_NAME}}
+
+# One-shot summary an operator can run to confirm obs cluster
+# health: the VM's lima state, the cluster node's readiness, and
+# the per-resource shape of the `observability` namespace.
+obs-status:
+    @echo "=== Lima VM ==="
+    limactl list {{OBS_VM_NAME}}
+    @echo "=== Cluster node ==="
+    kubectl --context {{OBS_CONTEXT}} get nodes
+    @echo "=== observability namespace ==="
+    kubectl --context {{OBS_CONTEXT}} -n {{OBS_NAMESPACE}} get pods,pvc,svc
+
+# Port-forward the in-cluster grafana to host :3001. The 3001
+# choice is deliberate so this recipe does NOT collide with the
+# compose grafana on :3000 (both stacks run side-by-side until
+# slice 22 retires the compose stack). `kubectl port-forward` is
+# a long-running foreground process — open a separate terminal.
+#
+# Default grafana admin credentials (local-dev only):
+#   user:     admin
+#   password: obs-local-dev
+# The Secret is committed under
+# infra/k8s-obs/base/grafana/secret.yaml. See README
+# "Local observability cluster" for the full credential note.
+obs-grafana:
+    kubectl --context {{OBS_CONTEXT}} -n {{OBS_NAMESPACE}} port-forward svc/grafana 3001:80
+
+# Render the obs local overlay with `--enable-helm` and apply.
+# Wait up to 180 s for every pod in the `observability` namespace
+# to reach Ready — the LGTM stack's image pulls dominate first-
+# apply latency.
+obs-apply:
+    kustomize build --enable-helm {{OBS_LOCAL_OVERLAY}} | kubectl --context {{OBS_CONTEXT}} apply -f -
+    kubectl --context {{OBS_CONTEXT}} wait --for=condition=Ready pod --all -n {{OBS_NAMESPACE}} --timeout=180s
+
+# Show the cluster-vs-manifest delta for the obs overlay. `kubectl
+# diff` exits non-zero when changes are present (by design); the
+# leading `-` tells just to treat that as a successful recipe.
+obs-diff:
+    -kustomize build --enable-helm {{OBS_LOCAL_OVERLAY}} | kubectl --context {{OBS_CONTEXT}} diff -f -
+
+# Tear down every resource the obs local overlay renders. Leaves
+# the Lima VM running; pair with `just obs-down` for a full stop.
+obs-delete:
+    kustomize build --enable-helm {{OBS_LOCAL_OVERLAY}} | kubectl --context {{OBS_CONTEXT}} delete -f -

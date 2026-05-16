@@ -282,6 +282,154 @@ asymmetry is introduced here.
   already exists as a placeholder; the next slice fills it in alongside the
   Hetzner box provisioning script.
 
+## Local observability cluster
+
+Slice `add-local-k3s-obs-cluster` adds a **second** Lima VM
+(`social-obs`) running its own single-node k3s cluster, dedicated to
+the LGTM observability stack (Prometheus, Loki, Tempo, Grafana,
+Alertmanager). It is the local mirror of the project's eventual
+production target: two Hetzner boxes, one for app workloads, one for
+observability — the cluster you are observing is the cluster most
+likely to break, and observability that dies with the workload it
+instruments is observability you can't trust during an outage. The
+local two-VM shape exercises the cross-cluster primitives (separate
+kubeconfig contexts, separate apiservers, separate PKI roots,
+push-only data flow) that the production layout needs.
+
+This slice is **pure layout**: the second cluster stands up, the
+stack reports Ready, Grafana loads with an empty data sources list.
+No app data flows in yet — that lands in the next slice
+(`add-k3s-app-collector`).
+
+### Prerequisites
+
+Same as [Local k3s cluster](#local-k3s-cluster) above
+(`brew install lima just kubectl helm`). No new packages.
+
+### Verb surface
+
+| Recipe            | What it does                                                              |
+| ----------------- | ------------------------------------------------------------------------- |
+| `just obs-up`     | Boot the obs Lima VM (first boot installs k3s). Idempotent.               |
+| `just obs-down`   | Stop the obs VM. On-disk state (PVC contents) preserved.                  |
+| `just obs-status` | One-shot summary: `limactl list`, node, pods/pvc/svc in `observability`.  |
+| `just obs-apply`  | Render `infra/k8s-obs/overlays/local` and apply. Waits for all pods Ready.|
+| `just obs-diff`   | Show the cluster-vs-manifest delta for the obs overlay.                   |
+| `just obs-delete` | Tear down every resource the obs local overlay renders.                   |
+| `just obs-grafana`| `kubectl port-forward svc/grafana 3001:80` (separate terminal).           |
+
+### Dev loop
+
+```sh
+just obs-up        # boots second Lima VM + k3s (first run only — ~2 minutes)
+just obs-apply     # renders the local overlay + applies; waits for all pods Ready
+just obs-grafana   # port-forward svc/grafana 3001:80 (separate terminal)
+# open http://localhost:3001 — log in (admin / obs-local-dev)
+# Configuration → Data sources should be EMPTY — that's the expected
+# slice-17 end state. Data flows in starting from slice 18.
+just obs-down      # at end of day, optional — pair with `just vm-down` to stop both
+```
+
+Default grafana admin credentials (local-dev only):
+
+```
+user:     admin
+password: obs-local-dev
+```
+
+The Secret is committed at `infra/k8s-obs/base/grafana/secret.yaml`
+and is labeled `social.io/credential-scope: local-dev` so a grep makes
+it obvious. The Hetzner overlay
+(`infra/k8s-obs/overlays/hetzner/kustomization.yaml`) MUST NOT reuse
+this credential — the placeholder there spells the substitution out.
+
+### Host kubeconfig
+
+The obs cluster's kubeconfig lands at
+`~/.lima/social-obs/copied-from-guest/kubeconfig.yaml` with context
+name `social-obs`. The host-side apiserver port is `16444` (not
+`6443`, which is Docker Desktop's k8s; not `16443`, which is the app
+cluster's; not `6444`, which lima-social already auto-forwards from
+its in-VM kube-scheduler). Merge into `~/.kube/config` the same way
+as the app cluster:
+
+```sh
+KUBECONFIG=~/.kube/config:~/.lima/social-obs/copied-from-guest/kubeconfig.yaml \
+  kubectl config view --flatten > ~/.kube/config.merged && mv ~/.kube/config.merged ~/.kube/config
+# Both contexts coexist; switch with --context or `kubectl config use-context`.
+kubectl --context social-obs get nodes
+kubectl --context lima-social get nodes  # the app cluster, unchanged
+```
+
+### Non-goals (in this slice)
+
+- **No data flow.** Nothing in the app cluster talks to the obs
+  cluster yet. The backend still ships OTLP to
+  `host.lima.internal:4318` (the compose-on-host collector); the
+  obs grafana has no datasources configured. Slice 18 wires the
+  cross-cluster path.
+- **No cross-cluster mTLS.** The obs cluster's OTLP receivers (when
+  they appear in slice 18) start with no auth. mTLS is its own slice
+  (slice 19, `add-cross-cluster-mtls`).
+- **No retirement of the host docker-compose observability stack.**
+  Compose continues to receive app telemetry on `:4318` throughout
+  this slice. Retirement happens in slice 22
+  (`retire-compose-observability`) after the obs cluster has
+  demonstrably absorbed everything compose was doing.
+- **No Prometheus Operator / kube-prometheus-stack.** Each LGTM
+  component is a separately-pinned Helm chart deliberately — the
+  Operator's ~30 CRDs hide too much for the learning intent of this
+  project. See
+  `openspec/changes/add-local-k3s-obs-cluster/design.md` Decision 3.
+- **No CI integration.** The obs cluster is local-only for now.
+- **No Ingress.** Grafana, Prometheus, etc. are reached via
+  `kubectl port-forward`. The `add-cluster-ingress` slice (if it
+  lands before Hetzner deploy) settles Traefik-vs-ingress-nginx.
+
+### Forward arc (the next six slices)
+
+`add-local-k3s-obs-cluster` is the first of a 7-slice arc that moves
+observability from compose-on-host to a two-cluster-on-Hetzner
+production deploy. The arc is sequenced so each slice is
+independently revertable and the visibility-into-the-app-cluster
+property is never broken.
+
+1. **slice 17** `add-local-k3s-obs-cluster` — second Lima VM + k3s
+   + empty LGTM stack. (this slice)
+2. **slice 18** `add-k3s-app-collector` — otel-collector in the app
+   cluster; backend OTLP target flips to the obs cluster; grafana
+   gets datasources. App traces visible in obs-cluster grafana.
+3. **slice 19** `add-cross-cluster-mtls` — self-signed CA + TLS
+   certs in both clusters; cross-cluster OTLP becomes mTLS only.
+4. **slice 20** `add-k3s-pod-log-shipping` — DaemonSet ships pod
+   logs over OTLP to the obs cluster's loki.
+5. **slice 21** `add-k3s-cluster-metrics` — kubelet + cAdvisor +
+   node-exporter scrape via the app collector; cluster dashboards
+   in obs grafana.
+6. **slice 22** `retire-compose-observability` — delete compose
+   prometheus/grafana/tempo/loki/alertmanager/collector; migrate
+   any remaining dashboards/rules; obs lives only in the obs cluster.
+7. **slice 23** `add-hetzner-deploy` — overlays/hetzner for app
+   cluster + overlays/hetzner for obs cluster; cert-manager + Let's
+   Encrypt; real two-box prod deploy.
+
+See
+`openspec/changes/add-local-k3s-obs-cluster/design.md` "Future
+Slices in This Arc" for the full sequencing rationale.
+
+### Cost of the two-VM shape
+
+Running both VMs concurrently commits ~16 GiB RAM (8 per VM) and
+~128 GiB disk allocation (64 per VM). On a typical 16–32 GiB
+developer machine, the obs VM is opt-in: `just obs-up` when working
+on observability, `just obs-down` when not. The app cluster runs
+independently — stopping the obs VM has zero impact on
+`./gradlew :backend:bootRun`, the e2e harness, or compose. The cost
+is the honest price of an honest local mirror; a namespace-split
+shortcut would not exercise the cross-cluster auth / network /
+discovery primitives the production deploy needs (design.md
+Decision 1).
+
 ## Logging in locally
 
 Once Postgres, the backend, and the frontend dev server are running:
@@ -326,6 +474,19 @@ visualise them. As of slice `add-local-k3s-postgres`, `postgres-exporter`'s
 `postgres` service to `host.docker.internal:5432` — the same Lima-forwarded
 port the backend talks to. See [Local k3s cluster](#local-k3s-cluster) for
 the workload that now lives behind that port.
+
+**Two parallel observability stacks — transitional state.** As of slice
+`add-local-k3s-obs-cluster`, a second LGTM stack runs inside a dedicated
+Lima VM / k3s cluster — see
+[Local observability cluster](#local-observability-cluster) above. The
+compose stack documented in *this* section is still primary and still
+receives app telemetry on `:4318`; the in-cluster stack stands up empty
+(no data sources, no dashboards) until slice 18 wires the cross-cluster
+data flow. **Today** (slice 17), the compose Grafana on `:3000` is where
+you look to see real data. **Tomorrow** (post-slice-22), the in-cluster
+Grafana on `:3001` will be the only target — at which point this section
+will move to the obs cluster cross-link entirely and the compose stack
+will be retired.
 
 ```sh
 docker-compose --profile observability up -d
