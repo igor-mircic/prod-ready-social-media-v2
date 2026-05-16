@@ -67,6 +67,14 @@ EXPOSE 8080
 
 The exact `ARG` ↔ `ENV` plumbing is settled at implementation time but the shape above is the contract. BuildKit's pnpm-store cache mount keeps warm builds fast.
 
+**Implementation reveal — build context is the repo root, not `frontend/`.** The Dockerfile shape above shows `COPY package.json pnpm-lock.yaml ./` followed by `COPY . .`, which presumes `frontend/` as the build context. That presumption is broken by `frontend/orval.config.ts`'s `input: '../openapi/openapi.json'` reference: the orval postinstall hook needs the openapi spec at a path that sits outside `frontend/`. Implementing the slice against a `frontend/`-scoped build context fails at `pnpm install` with `No config file found in /app` (orval can't reach its config-pointed openapi source). The fix is to expand the build context to the repo root and to invoke `pnpm install --frozen-lockfile --ignore-scripts` (skipping the postinstall), then explicitly `RUN pnpm exec orval` after copying both `frontend/` and `openapi/` into the builder stage, then `pnpm build`. Concretely:
+
+- `just frontend-image` runs `docker build -f frontend/Dockerfile -t 127.0.0.1:5000/frontend:dev .` from the repo root.
+- The `frontend/Dockerfile` `COPY` directives become repo-root-relative (`COPY frontend/package.json frontend/pnpm-lock.yaml ./`, `COPY frontend/ ./`, `COPY openapi/ ../openapi/`).
+- A repo-root `.dockerignore` is the file Docker actually reads (only the build-context root's `.dockerignore` is honored). `frontend/.dockerignore` is kept as documentation per the spec requirement and as defense-in-depth for any future `frontend/`-context builds.
+
+The `/config.js` runtime-injection spike (see "Open Questions") would not have changed this — the openapi cross-directory reference is a build-time concern.
+
 Rejected:
 
 - **Trunk-served bundle as a Node process (`serve -s dist`).** Smaller learning curve than nginx; bigger surface, less production-real, and no built-in reverse-proxy. nginx wins.

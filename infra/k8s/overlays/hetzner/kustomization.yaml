@@ -59,6 +59,40 @@
 #     endpoint behind an API token) is the next slice's open
 #     question. Either way the override lives here, not in base.
 #
+# Slice 16 (add-local-k3s-frontend) — the next slice
+# (add-hetzner-deploy) will plug the frontend pieces in here:
+#
+#   - Strategic-merge patch on the frontend Deployment swapping the
+#     image reference from `registry.local:5000/frontend:dev` (local
+#     overlay's floating tag) to a digest-pinned production tag
+#     served from ghcr.io, e.g.
+#     `ghcr.io/<owner>/frontend@sha256:<digest>`. The local registry
+#     and its `registries.yaml` mirror do not exist on the Hetzner
+#     box; pulls come from ghcr.io directly.
+#   - `imagePullSecrets: [{ name: ghcr-pull }]` reuses the same
+#     Secret slice 15's backend stub introduces (one `read:packages`
+#     token scoped to ghcr.io covers both images).
+#   - `imagePullPolicy: IfNotPresent` (the default) — digest-pinned
+#     tags mean re-pulling adds nothing. The local overlay's `Always`
+#     patch is intentionally NOT inherited here.
+#   - Build-time Vite env rebake for production URLs: the production
+#     image rebuilds with `--build-arg VITE_API_BASE_URL=''` (if
+#     same-origin Ingress) or `https://api.<host>` (if split origins),
+#     `--build-arg VITE_OTEL_TRACES_ENDPOINT=...` (production
+#     collector address). The `/config.js` runtime-injection spike
+#     (design.md "Open Questions") would remove this rebuild step;
+#     until then each environment gets its own image build.
+#   - Resource caps: likely unchanged. nginx idles at ~5 MiB; the
+#     base manifest's 200m/128Mi limits are comfortable on the CAX21
+#     envelope. Tighten only if observed steady-state usage justifies.
+#   - Probe timings: likely unchanged. Sub-second nginx start makes
+#     the base probe timings appropriate everywhere.
+#   - TLS / DNS / Ingress: a future `add-cluster-ingress` slice owns
+#     the decision between Traefik (k3s default) and ingress-nginx.
+#     Once landed, the Hetzner frontend Service gets an Ingress
+#     resource pointing the production hostname at the same-origin
+#     `/` path.
+#
 # Apply path is intentionally NOT wired into the justfile until the
 # Hetzner slice lands. `just k8s-apply` targets overlays/local only.
 apiVersion: kustomize.config.k8s.io/v1beta1

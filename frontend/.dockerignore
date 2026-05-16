@@ -1,0 +1,28 @@
+# Keep the Docker build context small and reproducible.
+#
+# `node_modules` and `dist` are rebuilt inside the builder stage from
+# `package.json` + `pnpm-lock.yaml`, so shipping them in the context
+# costs hundreds of MiB for nothing (and risks dragging stale host
+# artefacts into the image). Playwright reports and test results are
+# host-side e2e debris. `.env*` files would bake host-specific config
+# into the image; the slice's policy is build-arg-driven env vars
+# (see Dockerfile).
+node_modules
+dist
+dist-ssr
+.git
+.gitignore
+playwright-report
+test-results
+*.log
+.env
+.env.*
+
+# Editor / OS clutter.
+.vscode
+.idea
+.DS_Store
+
+# Local-only files that should never leak into an image.
+*.local
+coverage

@@ -141,3 +141,58 @@ backend-delete:
 
 # Rebuild the image + apply in one shot (the 95% path).
 backend-rebuild: backend-image backend-apply
+
+# === Slice 16 (add-local-k3s-frontend) — frontend-in-cluster verbs. ===
+#
+# Side-channel: these recipes drive the OPT-IN k3s frontend loop.
+# `pnpm dev` (host Vite on :5173) and the e2e `vite preview` harness
+# (on :4173) still own the canonical dev flow; nothing in CI uses
+# these. See README "Run the frontend in cluster (optional)" for the
+# full flow.
+#
+# The in-k3s frontend strictly pairs with the in-k3s backend — nginx
+# in the pod reverse-proxies `/api/*` and `/actuator/*` to
+# `backend.social.svc.cluster.local:8080`. Running this without
+# `just backend-apply` first yields HTTP 502 on API calls (by design;
+# see design.md Decision 5).
+#
+# Build context is the REPO ROOT (`.`) so the Dockerfile can reach
+# `openapi/openapi.json` — orval's input — without symlink trickery.
+# Push tag is `127.0.0.1:5000/frontend:dev` (host-resolvable); the
+# cluster references `registry.local:5000/frontend:dev` and the k3s
+# `registries.yaml` mirror rewrites it to `host.lima.internal:5000`.
+#
+# Build the frontend image and push it to the local OCI registry.
+frontend-image:
+    docker compose --profile registry up -d registry
+    docker build -f frontend/Dockerfile -t 127.0.0.1:5000/frontend:dev .
+    docker push 127.0.0.1:5000/frontend:dev
+    @echo "Image pushed: 127.0.0.1:5000/frontend:dev (cluster reference: registry.local:5000/frontend:dev)"
+
+# Apply the local overlay and block on rollout-status (120s is
+# generous — nginx-on-arm64 starts in well under a second).
+#
+# Apply the local overlay and block until frontend is Ready.
+frontend-apply:
+    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
+    kubectl rollout status deploy/frontend -n {{PG_NAMESPACE}} --timeout=120s
+
+# Tail frontend pod logs (follow).
+frontend-logs:
+    kubectl logs -n {{PG_NAMESPACE}} deploy/frontend -f
+
+# The 13000 choice is deliberate so this recipe does NOT collide with
+# Vite dev (`:5173`), Vite preview (`:4173`), or the slice-15 backend
+# port-forward (`:18080`). `kubectl port-forward` is a long-running
+# foreground process — open a separate terminal.
+#
+# Port-forward the in-cluster frontend to host :13000.
+frontend-forward:
+    kubectl port-forward -n {{PG_NAMESPACE}} svc/frontend 13000:80
+
+# Tear down frontend Deployment + Service (label-scoped).
+frontend-delete:
+    kubectl delete deploy,svc -n {{PG_NAMESPACE}} -l app.kubernetes.io/name=frontend --ignore-not-found
+
+# Rebuild the image + apply in one shot (the 95% path).
+frontend-rebuild: frontend-image frontend-apply

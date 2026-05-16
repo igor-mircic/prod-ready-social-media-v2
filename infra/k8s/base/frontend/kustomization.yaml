@@ -1,0 +1,23 @@
+# Frontend workload — plain-resource Kustomize component.
+#
+# Mirrors the slice-15 backend sibling's shape: a single Deployment +
+# a ClusterIP Service, no ConfigMap, no Ingress. The image reference
+# `registry.local:5000/frontend:dev` matches the k3s `registries.yaml`
+# mirror rewrite (see README's "Run the backend in cluster (optional)"
+# for the host-/manifest-/VM-side registry-hostname asymmetry; the
+# frontend reuses it unchanged).
+#
+# Common labels applied to every generated resource: this is what
+# the slice's `frontend-delete` `just` recipe uses to scope its
+# `kubectl delete -l ...` invocation.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: frontend
+
+resources:
+  - ./deployment.yaml
+  - ./service.yaml

@@ -1,0 +1,26 @@
+# Frontend Service — ClusterIP only.
+#
+# The slice ships no Ingress and no LoadBalancer (the
+# Traefik-vs-ingress-nginx decision is rolled forward to a dedicated
+# `add-cluster-ingress` slice). Developer access is via the
+# `just frontend-forward` recipe, which `kubectl port-forward`s
+# 13000 → 80. The Service's selector is satisfied by the
+# `app.kubernetes.io/name: frontend` label that the sibling
+# kustomization.yaml applies across every resource.
+#
+# Port mapping: Service :80 → pod container :8080 (the unprivileged
+# nginx variant's default). The Service address stays the boring :80;
+# only the pod-internal config knows about :8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

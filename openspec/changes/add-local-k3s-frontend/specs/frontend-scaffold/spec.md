@@ -45,9 +45,15 @@ The `frontend/Dockerfile` builder stage SHALL accept build-time arguments for th
 - **AND** each ARG is exported as an `ENV` of the same name in the builder stage so Vite resolves it during `pnpm build`
 
 #### Scenario: Build with defaults produces an in-cluster-ready bundle
-- **WHEN** a developer runs `docker build -t 127.0.0.1:5000/frontend:dev frontend/` with no `--build-arg` flags
+- **WHEN** a developer runs `just frontend-image` (which invokes `docker build -f frontend/Dockerfile -t 127.0.0.1:5000/frontend:dev .` from the repo root) with no `--build-arg` overrides
 - **THEN** the resulting image's bundle uses relative URLs for API calls (no absolute origin baked into `/api/*` fetches)
 - **AND** the bundle's OTel traces exporter points at `http://localhost:4318`
+
+#### Scenario: Build context is the repo root, not `frontend/`
+- **WHEN** a reader inspects the `frontend-image` recipe in `justfile`
+- **THEN** the `docker build` invocation passes `-f frontend/Dockerfile` and uses `.` (the repo root) as the build context
+- **AND** the rationale is documented (the `frontend/orval.config.ts` postinstall references `../openapi/openapi.json`, which sits at the repo root, so the build context must include both `frontend/` and `openapi/`)
+- **AND** a repo-root `.dockerignore` exists that excludes the sibling top-level directories (`backend/`, `e2e/`, `infra/`, `openspec/`) and the usual node/git/log noise so the active build context stays small
 
 ### Requirement: A pod-local nginx config lives at `frontend/docker/nginx.conf`
 

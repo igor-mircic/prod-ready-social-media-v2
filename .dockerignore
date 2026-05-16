@@ -1,0 +1,37 @@
+# Repo-root build context for the frontend image (slice 16). Docker
+# only reads `.dockerignore` at the build context root, so this file
+# governs what `just frontend-image` ships to the daemon. The mirror
+# `frontend/.dockerignore` is kept for documentation and so future
+# `frontend/`-context builds stay tidy.
+#
+# Exclude every sibling that the frontend build does not consume.
+backend
+e2e
+infra
+openspec
+
+# Per-subtree noise.
+**/node_modules
+**/dist
+**/dist-ssr
+**/.next
+**/.turbo
+**/coverage
+**/playwright-report
+**/test-results
+**/*.log
+**/.DS_Store
+
+# VCS metadata and editor clutter (kept out of every layer).
+.git
+.gitignore
+.vscode
+.idea
+.claude
+
+# Host-side env files (build args are the contract; see Dockerfile).
+**/.env
+**/.env.*
+
+# Local lima-vm artifacts (large, host-specific).
+**/.lima
