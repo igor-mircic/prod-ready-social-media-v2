@@ -49,6 +49,48 @@
 #     a downstream slice's decision; the slice will land explicit
 #     retention configs alongside the storage sizing.
 #
+# Slice 18b (bridge-collectors-to-obs-cluster) — the next slice
+# (add-hetzner-deploy) will plug the obs-cluster collector pieces
+# in here:
+#
+#   - Production resource caps on the collector container.
+#     Probably `requests: cpu=100m / memory=256Mi`, `limits:
+#     cpu=1000m / memory=1Gi` — this is the cross-cluster
+#     aggregation point and will absorb the app cluster's traces
+#     today plus slice 20's log records and slice 21's metric
+#     data points later. The local overlay's
+#     50m/128m..500m/512m envelope assumes a single-developer
+#     trace volume.
+#   - Real TLS material on the OTLP receiver. Slice 19
+#     (`add-cross-cluster-mtls`) introduces cert-manager-issued
+#     client/server certs (a self-signed CA shared between the
+#     app cluster and the obs cluster); the certs land in a
+#     Secret mounted into this collector's pod, wired into the
+#     `otlp` receiver's `protocols.grpc.tls:` / `protocols.http.tls:`
+#     blocks (`cert_file`, `key_file`, `client_ca_file`). Until
+#     slice 19 lands, the local overlay accepts cleartext OTLP
+#     from anything that reaches `host.lima.internal:14317`
+#     (acceptable on the Lima loopback; NOT acceptable in prod).
+#   - Ingress or LoadBalancer that terminates inbound OTLP on
+#     the obs box's public / private IP. Local overlay uses
+#     klipper-lb + Lima portForwards; on Hetzner this is
+#     hcloud-cloud-controller-manager's LoadBalancer (a Hetzner
+#     LB with private-network-only frontend) or a Traefik
+#     IngressRouteTCP, decided alongside the
+#     `add-cluster-ingress` slice.
+#   - Tighter probe timings: `livenessProbe.timeoutSeconds`
+#     explicit at 1s, `readinessProbe.periodSeconds` perhaps 3s,
+#     `livenessProbe.initialDelaySeconds` lower (the contrib
+#     collector starts in well under a second on the CAX11
+#     envelope). Final numbers measured on the real box.
+#   - Storage / retention sizing for the obs box. The obs
+#     collector itself is mostly stateless (no on-disk buffer in
+#     this slice; the `sending_queue` extension defaults to in-
+#     memory), but the slice that lands prod will revisit whether
+#     to add an on-disk queue to absorb network partitions to
+#     the app cluster's OTLP exporter. Tied to the disk envelope
+#     the rest of the LGTM stack uses.
+#
 # Apply path is intentionally NOT wired into the justfile in this
 # slice. `just obs-apply` targets overlays/local only. The slice
 # that adds Hetzner deploy will add a separate `obs-apply-hetzner`

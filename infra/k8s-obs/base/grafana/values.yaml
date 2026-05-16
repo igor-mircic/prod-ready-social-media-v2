@@ -1,11 +1,21 @@
 # grafana/grafana chart values for slice 17
-# (add-local-k3s-obs-cluster). Chart pin: 10.5.15 (app v12.3.1).
+# (add-local-k3s-obs-cluster) + slice 18b
+# (bridge-collectors-to-obs-cluster). Chart pin: 10.5.15 (app
+# v12.3.1).
 #
-# Empty-stack posture: no datasources, no dashboards, no
-# sidecar-driven provisioning. The UI must load successfully and
-# the data sources list must be EMPTY — that is the spec scenario
-# this slice asserts. Datasources + dashboards land in slice 18
-# (add-k3s-app-collector) once data starts crossing the boundary.
+# Slice 17 stood grafana up with NO datasources. Slice 18b
+# provisions all four (Tempo, Prometheus, Loki, Alertmanager)
+# up front, even though only Tempo carries real data this slice
+# — the other three render "no data" until their respective
+# data-plane slices land (slice 20 for Loki via the pod log
+# shipper, slice 21 for Prometheus via the cluster-metrics
+# pipeline, future alerting slice for Alertmanager). Pre-staging
+# avoids three rounds of churn against the same `datasources:`
+# block in later slices.
+#
+# Dashboards remain unprovisioned in this slice. Dashboard
+# provisioning lands when there is enough data to render
+# something meaningful — earliest slice 20.
 
 persistence:
   enabled: true
@@ -23,11 +33,81 @@ admin:
   userKey: admin-user
   passwordKey: admin-password
 
-# Empty datasource provisioning — the spec scenario "no datasources
-# are pre-configured" depends on this. Slice 18 will set
-# `datasources.datasources.yaml.datasources:` with the obs cluster's
-# in-namespace Prometheus / Loki / Tempo endpoints.
-datasources: {}
+# Datasource provisioning (slice 18b). Four datasources, each
+# pointing at the corresponding in-cluster Service DNS in the
+# `observability` namespace. The chart renders this block into
+# a ConfigMap mounted at grafana's
+# `/etc/grafana/provisioning/datasources/` so grafana reads them
+# on startup. All four are `editable: false` — operators see the
+# datasource state in git, not in grafana's UI.
+#
+# Service DNS resolutions (verified via
+# `kustomize build --enable-helm infra/k8s-obs/overlays/local`):
+#   Tempo:        tempo.observability.svc.cluster.local:3200   (HTTP query)
+#   Prometheus:   prometheus-server.observability.svc.cluster.local:80
+#   Loki:         loki.observability.svc.cluster.local:3100
+#   Alertmanager: alertmanager.observability.svc.cluster.local:9093
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      # Tempo carries real backend trace data starting this slice
+      # (the app cluster collector dual-writes to the obs cluster
+      # collector, which exports via otlp/tempo). The
+      # service-graph view (`serviceMap.datasourceUid: prometheus`)
+      # mirrors the compose-side stance from slice 5 — once
+      # browser-emitted spans land here (slice 18c routes the
+      # browser through nginx and eventually to this collector
+      # too) the graph shows the `frontend → backend` edge in
+      # Explore → Tempo → Service Graph. Until then it renders
+      # the backend-only subgraph from RED metrics in
+      # Prometheus.
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo.observability.svc.cluster.local:3200
+        isDefault: false
+        editable: false
+        jsonData:
+          serviceMap:
+            datasourceUid: prometheus
+      # Prometheus renders "no data" until slice 21
+      # (`add-k3s-cluster-metrics`) lands. The datasource is
+      # connection-OK against the in-cluster Service today (the
+      # chart's prometheus is up since slice 17); only the
+      # producer side is missing.
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-server.observability.svc.cluster.local
+        isDefault: false
+        editable: false
+      # Loki renders "no data" until slice 20
+      # (`add-k3s-pod-log-shipping`) lands the DaemonSet + filelog
+      # receiver that ingests pod logs.
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.observability.svc.cluster.local:3100
+        isDefault: false
+        editable: false
+      # Alertmanager's UI is consumable now (the chart's
+      # alertmanager has been up since slice 17 and renders the
+      # default empty state). Alerting rules are owned by a
+      # future slice; this datasource declaration is pre-staging
+      # so that slice does not also have to add the datasource.
+      - name: Alertmanager
+        uid: alertmanager
+        type: alertmanager
+        access: proxy
+        url: http://alertmanager.observability.svc.cluster.local:9093
+        isDefault: false
+        editable: false
+        jsonData:
+          implementation: prometheus
 
 # Empty dashboard provisioning — same rationale as datasources.
 dashboardProviders: {}

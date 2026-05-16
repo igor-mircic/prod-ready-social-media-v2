@@ -321,3 +321,27 @@ obs-diff:
 # the Lima VM running; pair with `just obs-down` for a full stop.
 obs-delete:
     kustomize build --enable-helm {{OBS_LOCAL_OVERLAY}} | kubectl --context {{OBS_CONTEXT}} delete -f -
+
+# === Slice 18b (bridge-collectors-to-obs-cluster) — obs-cluster
+# collector verbs. ===
+#
+# The obs-cluster collector lives in the `observability`
+# namespace alongside the LGTM stack and receives OTLP from the
+# app cluster collector via Lima's portForward
+# (`host.lima.internal:14317` -> obs VM :4317 -> klipper-lb ->
+# this Service). Daily verbs only — `just obs-apply` already
+# stands the collector up.
+
+# Tail obs-cluster collector pod logs (follow).
+obs-collector-logs:
+    kubectl --context {{OBS_CONTEXT}} logs -n {{OBS_NAMESPACE}} deploy/collector -f
+
+# Roll the obs-cluster collector Deployment to pick up ConfigMap
+# edits (kubelet does NOT auto-restart pods when a mounted
+# ConfigMap's data changes). Blocks on rollout-status (60 s — the
+# contrib collector starts in well under a second).
+#
+# Roll the obs-cluster collector Deployment to pick up ConfigMap edits.
+obs-collector-rollout:
+    kubectl --context {{OBS_CONTEXT}} rollout restart deploy/collector -n {{OBS_NAMESPACE}}
+    kubectl --context {{OBS_CONTEXT}} rollout status deploy/collector -n {{OBS_NAMESPACE}} --timeout=60s

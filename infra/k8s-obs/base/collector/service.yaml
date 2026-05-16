@@ -1,0 +1,48 @@
+# LoadBalancer Service in front of the obs cluster collector
+# Deployment (slice 18b). klipper-lb (the k3s default) assigns
+# this Service the obs VM's primary IP, and Lima portForwards
+# (infra/lima/obs.yaml — guestPort 4317 -> hostPort 14317,
+# guestPort 4318 -> hostPort 14318) republish those ports on the
+# macOS host. The app cluster collector's `otlp/obs-cluster`
+# exporter dials `host.lima.internal:14317` and the resulting
+# packet path is: app-VM pod -> host.lima.internal -> macOS
+# host :14317 -> obs-VM :4317 -> klipper-lb -> this Service ->
+# collector pod.
+#
+# Why LoadBalancer (not ClusterIP, not NodePort):
+#   - matches the slice 14 postgres precedent (klipper-lb assigns
+#     the VM IP; Lima portForwards layer routes host-side traffic);
+#   - operators do not have to learn a new ingress mechanism, and
+#     do not have to remember a NodePort number in the 30000-32767
+#     range. The stable host-side ports come from Lima, not from
+#     the kube Service.
+#
+# Why this Service exposes anything off-cluster at all (despite the
+# slice-17 `observability-cluster` spec's fate-separation invariant
+# that the obs cluster is otherwise an oasis):
+#   the OTLP receiver IS the one ingress path the obs cluster
+#   legitimately exposes toward the app cluster — design.md
+#   Decision 6 in slice 17, made explicit by this slice. Slice 19
+#   (`add-cross-cluster-mtls`) puts a TLS / client-cert envelope
+#   on this receiver; today (18b) it accepts cleartext OTLP.
+#
+# No NodePort override below — klipper-lb picks the IP, no node-
+# side port pinning needed. No healthcheck port on the Service:
+# kubelet probes the pod's :13133 directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP

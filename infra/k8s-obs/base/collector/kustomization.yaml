@@ -1,0 +1,42 @@
+# OpenTelemetry Collector workload for the obs cluster — slice 18b
+# (bridge-collectors-to-obs-cluster). This is the second of three
+# sub-slices in the slice-18 carve-up (see slice 18a proposal).
+# Slice 18a stood up the in-cluster collector inside the APP
+# cluster; this slice stands up a peer collector inside the OBS
+# cluster and wires the app collector to dual-write to it (compose
+# stays alive in parallel). Slice 18c flips the browser path; slice
+# 19 adds mTLS on the receiver below.
+#
+# Sibling config: `infra/k8s/base/collector/` (the app cluster
+# collector). The OTTL `transform/redact-path-ids` block in
+# ./configmap.yaml MUST stay byte-identical with the app
+# collector's (and with the compose collector's) until slice 22
+# retires the compose path; if you edit one, edit all three.
+#
+# Pipeline shape (declared in ./configmap.yaml):
+#   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — only the app
+#                  cluster collector dials this receiver)
+#     -> batch
+#     -> transform/redact-path-ids
+#     -> otlp/tempo (tempo.observability.svc.cluster.local:4317)
+#
+# The image tag is pinned below via the `images:` directive so
+# bumping it is a one-line edit. The Deployment references the
+# image by name without an inline tag.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: collector
+      app.kubernetes.io/part-of: observability
+
+resources:
+  - ./configmap.yaml
+  - ./deployment.yaml
+  - ./service.yaml
+
+images:
+  - name: otel/opentelemetry-collector-contrib
+    newTag: 0.111.0

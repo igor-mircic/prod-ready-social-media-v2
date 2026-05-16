@@ -340,10 +340,13 @@ local two-VM shape exercises the cross-cluster primitives (separate
 kubeconfig contexts, separate apiservers, separate PKI roots,
 push-only data flow) that the production layout needs.
 
-This slice is **pure layout**: the second cluster stands up, the
-stack reports Ready, Grafana loads with an empty data sources list.
-No app data flows in yet — that lands in the next slice
-(`add-k3s-app-collector`).
+Slice 17 was **pure layout**: the second cluster stood up, the stack
+reported Ready, Grafana loaded with an empty data sources list. Data
+started flowing in slice 18a (app cluster collector relays to compose)
+and slice 18b (app cluster collector dual-writes to BOTH compose AND
+the obs cluster collector; obs Grafana grows four provisioned
+datasources). See the [Bridging to the obs cluster](#bridging-to-the-obs-cluster)
+subsection below for the current dual-write topology.
 
 ### Prerequisites
 
@@ -405,16 +408,22 @@ kubectl --context social-obs get nodes
 kubectl --context lima-social get nodes  # the app cluster, unchanged
 ```
 
-### Non-goals (in this slice)
+### Non-goals (in the slice-17 layout work)
 
-- **No data flow.** Nothing in the app cluster talks to the obs
-  cluster yet. The backend still ships OTLP to
-  `host.lima.internal:4318` (the compose-on-host collector); the
-  obs grafana has no datasources configured. Slice 18 wires the
-  cross-cluster path.
-- **No cross-cluster mTLS.** The obs cluster's OTLP receivers (when
-  they appear in slice 18) start with no auth. mTLS is its own slice
-  (slice 19, `add-cross-cluster-mtls`).
+- ~~**No data flow.** Nothing in the app cluster talks to the obs
+  cluster yet.~~ **Superseded by slice 18b.** The app cluster
+  collector now dual-writes backend traces to the obs cluster
+  collector via `host.lima.internal:14317` (Lima portForward ->
+  klipper-lb -> obs collector pod). Obs Grafana renders the same
+  backend traces compose Grafana renders, with four provisioned
+  datasources (Tempo, Prometheus, Loki, Alertmanager — only Tempo
+  has data today; Loki / Prometheus / Alertmanager render "no
+  data" until slices 20 / 21 / future). See the
+  [Bridging to the obs cluster](#bridging-to-the-obs-cluster)
+  subsection below.
+- **No cross-cluster mTLS.** The obs cluster's OTLP receiver
+  (introduced in slice 18b) starts with no auth. mTLS is its own
+  slice (slice 19, `add-cross-cluster-mtls`).
 - **No retirement of the host docker-compose observability stack.**
   Compose continues to receive app telemetry on `:4318` throughout
   this slice. Retirement happens in slice 22
@@ -474,6 +483,126 @@ shortcut would not exercise the cross-cluster auth / network /
 discovery primitives the production deploy needs (design.md
 Decision 1).
 
+### Bridging to the obs cluster
+
+Slice `bridge-collectors-to-obs-cluster` (slice 18b) closes the
+data-plane gap that slice 17 left open. After this slice, the in-
+cluster app collector **dual-writes** backend traces: every batch
+goes to BOTH the compose collector (slice 18a's existing path) AND
+to a new collector tier inside the obs cluster. Compose Grafana on
+`:3000` and obs Grafana on `:3001` show the same backend trace
+data side-by-side — that side-by-side rendering is the operator
+confidence signal for the obs-cluster migration. Slice 22
+(`retire-compose-observability`) is the slice that finally
+collapses dual-write back to obs-only.
+
+Topology of the trace path:
+
+```
+backend pod
+  └── OTLP/HTTP -> collector.social.svc.cluster.local:4318
+                       (app cluster collector — single-pod Deployment)
+                       │
+                       ├── otlp/compose-relay -> host.lima.internal:4317
+                       │                            (compose collector
+                       │                             -> compose Tempo
+                       │                             -> compose Grafana :3000)
+                       │
+                       └── otlp/obs-cluster   -> host.lima.internal:14317
+                                                    (obs VM :4317 via Lima portForward
+                                                     -> klipper-lb -> obs collector pod
+                                                     -> in-cluster otlp/tempo
+                                                     -> tempo.observability.svc.cluster.local:4317
+                                                     -> obs Grafana :3001)
+```
+
+`host.lima.internal:14317` is the local mirror of the Hetzner
+reality (the obs box's tailscale / private-network IP terminated
+with mTLS); the `+10000` offset on the host-side port avoids
+collision with the compose collector's already-published `:4317`
+and is symmetric with the apiserver disambiguation (app `:16443`,
+obs `:16444`).
+
+Obs Grafana grows four provisioned datasources in this slice:
+**Tempo**, **Prometheus**, **Loki**, **Alertmanager** — each
+pointing at the corresponding in-cluster Service in the
+`observability` namespace. Only Tempo carries real data today;
+the others render *"no data"* until their data-plane slices
+land (slice 20 for Loki via pod log shipping, slice 21 for
+Prometheus via cluster metrics, future alerting slice for
+Alertmanager). All four are pre-staged now so later slices add
+data, not datasource-configuration churn.
+
+**Non-goal (this slice):** there is no auth on the obs cluster's
+OTLP receiver yet. The receiver accepts cleartext OTLP from
+anything that reaches it on `host.lima.internal:14317`. On the
+Lima loopback this is fine (no off-host reachability); on Hetzner
+it is NOT. Slice 19 (`add-cross-cluster-mtls`) introduces the
+cert material on the receiver before any cross-network deploy.
+
+#### Operator cutover after pulling this slice
+
+```sh
+# 1. Pick up the new Lima portForwards (Lima ONLY re-reads
+#    portForwards on VM start — a running VM does not see the
+#    edit).
+limactl stop social-obs && just obs-up
+
+# 2. Apply the obs cluster manifests (new collector, four
+#    datasources in grafana).
+kustomize build --enable-helm infra/k8s-obs/overlays/local \
+  | kubectl --context social-obs apply -f -
+
+# 3. Apply the app cluster updates (dual-write traces pipeline).
+just backend-apply
+```
+
+Then, in two terminals, tail both collectors:
+
+```sh
+just collector-logs      # app cluster collector
+just obs-collector-logs  # obs cluster collector
+```
+
+Generate traffic against the app (open the frontend, post
+something). The app collector logs report non-zero accepted spans
+and no `otlp/obs-cluster` exporter errors; the obs collector
+logs report non-zero accepted spans. Open `http://localhost:3000`
+(compose Grafana) and `http://localhost:3001` (`just obs-grafana`,
+obs Grafana) and query `service.name=backend` in Tempo — same
+traces in both, matching trace IDs.
+
+#### Degraded mode — obs VM down
+
+The dual-exporter design is independent-failure by construction.
+Stopping the obs VM with `limactl stop social-obs` does NOT block
+the compose path: the app collector logs `otlp/obs-cluster`
+exporter errors every batch interval (connection refused / dial
+timeout) but continues to deliver to `otlp/compose-relay`, and
+compose Grafana keeps rendering recent traces. Bringing the obs
+VM back up with `just obs-up` recovers the exporter automatically
+— no app-collector restart required.
+
+#### Troubleshooting
+
+If `just collector-logs` shows `otlp/obs-cluster` connection
+errors, check in order:
+
+- `kubectl --context social-obs -n observability get svc collector -o wide`
+  — `EXTERNAL-IP` should be the obs VM's primary IP, NOT
+  `<pending>`. `<pending>` means klipper-lb has not yet assigned
+  an IP; usually a fresh `obs-up` resolves it.
+- `lsof -i :14317` on the host — should show one Lima
+  `socket_vmnet` (or hostagent) listener and nothing else. If
+  another process holds the port, the Lima forward did not bind
+  and `host.lima.internal:14317` resolves but refuses.
+- `limactl list` — `social-obs` must be in `Running` state. A
+  stopped VM has no portForwards.
+- After editing `infra/lima/obs.yaml`, **the operator MUST run
+  `limactl stop social-obs && just obs-up`** before the new
+  forwards apply. Lima does not re-read `portForwards` on a
+  running VM.
+
 ## Logging in locally
 
 Once Postgres, the backend, and the frontend dev server are running:
@@ -525,13 +654,19 @@ Lima VM / k3s cluster — see
 [Local observability cluster](#local-observability-cluster) above. The
 compose stack documented in *this* section is still primary and still
 receives app telemetry on `:4318` (from the browser SDK and from the host
-backend) plus `:4317` (from the in-cluster collector's relay); the
-in-cluster stack stands up empty (no data sources, no dashboards) until
-slice 18b wires the cross-cluster data flow. **Today** (slices 17, 18a),
-the compose Grafana on `:3000` is where you look to see real data.
-**Tomorrow** (post-slice-22), the in-cluster Grafana on `:3001` will be
-the only target — at which point this section will move to the obs cluster
-cross-link entirely and the compose stack will be retired.
+backend) plus `:4317` (from the in-cluster collector's relay). As of
+slice `bridge-collectors-to-obs-cluster` (18b) the app cluster collector
+ALSO dual-writes traces to the obs cluster collector on
+`host.lima.internal:14317`; **both** compose Grafana (`:3000`) and obs
+Grafana (`:3001`) now show the same backend trace data side-by-side. The
+browser still posts spans cross-origin to the compose collector
+exclusively until slice 18c flips that path. **Today** (slices 17, 18a,
+18b), use compose Grafana on `:3000` for the full picture (BE + FE
+traces) and obs Grafana on `:3001` to verify the obs cluster has
+absorbed the BE traces. **Tomorrow** (post-slice-22), the in-cluster
+Grafana on `:3001` will be the only target — at which point this
+section will move to the obs cluster cross-link entirely and the
+compose stack will be retired.
 
 **BE-in-k3s telemetry path (slice 18a).** When the backend runs inside the
 local k3s cluster (`just backend-apply`), its OTel Java agent no longer
