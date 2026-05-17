@@ -5,8 +5,8 @@
 # alerts are (or are NOT) in `firing` state. Run from the repo root with:
 #
 #   docker run --rm --entrypoint promtool \
-#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
-#     prom/prometheus:v2.55.1 test rules /rules/slo-tests.yml
+#     -v "$PWD/infra/k8s-obs/base/prometheus:/prometheus:ro" \
+#     prom/prometheus:v2.55.1 test rules /prometheus/tests/slo-tests.yml
 #
 # The fixture mirrors the spec's scenarios one-for-one:
 #   - one firing test per multi-burn-rate alert (3 availability + 2×2 latency)
@@ -18,8 +18,8 @@
 # exp_annotations to "no annotations", so each firing assertion includes the
 # rule's summary verbatim.
 rule_files:
-  - slo-recording.yml
-  - slo-alerting.yml
+  - ../rules/slo-recording.yml
+  - ../rules/slo-alerting.yml
 
 evaluation_interval: 1m
 
@@ -43,7 +43,7 @@ tests:
               slo: api_availability
             exp_annotations:
               summary: "API availability burning 30d budget very fast (fast-burn)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityFastBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilityFastBurn.md"
 
   # ---------------------------------------------------------------------------
   # 2. ApiAvailabilitySlowBurn — 100% errors trips the 6h × 30m burn-rate pair.
@@ -64,7 +64,7 @@ tests:
               slo: api_availability
             exp_annotations:
               summary: "API availability burning 30d budget fast (slow-burn page)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilitySlowBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilitySlowBurn.md"
 
   # ---------------------------------------------------------------------------
   # 3. ApiAvailabilityBudgetBurn — 100% errors sustained over the 3d × 6h pair.
@@ -86,7 +86,7 @@ tests:
               slo: api_availability
             exp_annotations:
               summary: "API availability burning 30d budget steadily (ticket)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityBudgetBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilityBudgetBurn.md"
 
   # ---------------------------------------------------------------------------
   # 4. Steady-state: 24h of pure success traffic — none of the three availability
@@ -129,7 +129,7 @@ tests:
               slo: feed_read_latency
             exp_annotations:
               summary: "Feed-read latency burning 30d budget very fast (fast-burn)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/FeedReadLatencyFastBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/FeedReadLatencyFastBurn.md"
 
   # ---------------------------------------------------------------------------
   # 6. FeedReadLatencySlowBurn — every feed-read slow over 6h+.
@@ -150,7 +150,7 @@ tests:
               slo: feed_read_latency
             exp_annotations:
               summary: "Feed-read latency burning 30d budget fast (slow-burn page)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/FeedReadLatencySlowBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/FeedReadLatencySlowBurn.md"
 
   # ---------------------------------------------------------------------------
   # 7. PostCreateLatencyFastBurn — every post-create slow (> 500ms).
@@ -171,7 +171,7 @@ tests:
               slo: post_create_latency
             exp_annotations:
               summary: "Post-create latency burning 30d budget very fast (fast-burn)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostCreateLatencyFastBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostCreateLatencyFastBurn.md"
 
   # ---------------------------------------------------------------------------
   # 8. PostCreateLatencySlowBurn.
@@ -192,7 +192,7 @@ tests:
               slo: post_create_latency
             exp_annotations:
               summary: "Post-create latency burning 30d budget fast (slow-burn page)."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostCreateLatencySlowBurn.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostCreateLatencySlowBurn.md"
 
   # ---------------------------------------------------------------------------
   # 9. BackendDown — scrape target is down for 3 minutes, fires after 2m for:.
@@ -211,7 +211,7 @@ tests:
               job: backend
             exp_annotations:
               summary: "Backend scrape target is down."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/BackendDown.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/BackendDown.md"
 
   # ---------------------------------------------------------------------------
   # 10. BackendDown does NOT fire when scrape target is consistently up.

@@ -152,12 +152,42 @@ portForwards:
 - guestIP: 0.0.0.0
   guestPort: 4318
   hostPort: 14318
+# Slice 22b (retire-compose-observability) — publish the obs cluster's
+# LGTM Services on the macOS host, replacing the compose stack that
+# had been binding the same host ports until 22b's docker-compose
+# profile deletion. Every entry below carries `guestIP: 0.0.0.0` per
+# the same Lima 2.x lesson the OTLP forwards above call out (svclb's
+# 0.0.0.0 bind requires the explicit guestIP to override Lima's
+# auto-forwarder). MUST appear before the catch-all `ignore: true`
+# rule below.
+#
+# Pass-through ports (compose used same host port; obs Service uses
+# same in-cluster port):
+- guestIP: 0.0.0.0
+  guestPort: 9090
+  hostPort: 9090    # obs prometheus HTTP API
+- guestIP: 0.0.0.0
+  guestPort: 3200
+  hostPort: 3200    # obs tempo HTTP API
+- guestIP: 0.0.0.0
+  guestPort: 3100
+  hostPort: 3100    # obs loki HTTP API
+- guestIP: 0.0.0.0
+  guestPort: 9093
+  hostPort: 9093    # obs alertmanager HTTP API
+# Webhook-sink REMAP (design.md Decision 2): the obs Service binds
+# `:8080` (Express chart default); the e2e alerting spec's URL
+# constant points at `http://localhost:8081`. The Lima portForward
+# absorbs the asymmetry so the spec stays unchanged.
+- guestIP: 0.0.0.0
+  guestPort: 8080
+  hostPort: 8081
 # Catch-all: every other 127.0.0.1 listener inside the obs VM is
-# NOT exposed on the host. The two LGTM stacks are reached via
-# `kubectl port-forward` against the in-cluster Services rather
-# than via host port forwards. This avoids the noisy "address
-# already in use" warnings Lima emits when both VMs try to claim
-# the same kubelet / kube-proxy / kube-scheduler ports on the host.
+# NOT exposed on the host. Cluster-internal Services beyond the
+# ones listed above are reached via `kubectl port-forward`. This
+# avoids the noisy "address already in use" warnings Lima emits
+# when both VMs try to claim the same kubelet / kube-proxy /
+# kube-scheduler ports on the host.
 - guestPortRange: [1, 65535]
   ignore: true
 

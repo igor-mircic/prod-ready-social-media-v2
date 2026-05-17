@@ -10,12 +10,10 @@
 # `bridge-collectors-to-obs-cluster`). No browser change yet (that
 # is slice 18c `route-browser-otlp-through-nginx`).
 #
-# Sibling config: `infra/observability/collector/collector-config.yaml`
-# (the compose collector). The two collectors duplicate the
-# `transform/redact-path-ids` OTTL block on purpose for the
-# duration of the transition — if you edit one, edit the other.
-# Slice 22 (`retire-compose-observability`) collapses the two
-# into one.
+# Sibling config: `infra/k8s-obs/base/collector/configmap.yaml`
+# (the obs collector). The two collectors duplicate the
+# `transform/redact-path-ids` OTTL block on purpose — if you edit
+# one, edit the other (slice 22b deleted the third compose copy).
 #
 # The image tag is pinned via the `images:` directive below so
 # bumping it is a one-line edit. The Deployment references the

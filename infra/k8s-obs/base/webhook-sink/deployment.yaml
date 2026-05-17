@@ -3,7 +3,8 @@
 # from `infra/k8s-obs/base/kustomization.yaml`'s `namespace:`).
 #
 # Image: `registry.local:5000/webhook-sink:dev`. Built from
-# `infra/observability/webhook-sink/` and pushed by the
+# `infra/k8s-obs/base/webhook-sink/src/` (relocated to its
+# consumer-local home in slice 22b) and pushed by the
 # `just obs-webhook-sink-image` recipe (sibling to slice-15
 # `backend-image` / slice-16 `frontend-image`). The hostname is
 # the k3s containerd-side alias; the local OCI registry binds
@@ -12,7 +13,7 @@
 # `http://host.lima.internal:5000`.
 #
 # The sink is a tiny express.js HTTP service (see
-# `infra/observability/webhook-sink/server.js`) — three POST
+# `infra/k8s-obs/base/webhook-sink/src/server.js`) — three POST
 # endpoints (`/page`, `/ticket`, and `/healthz`) plus a
 # `GET /received` endpoint that returns a bounded ring buffer
 # of every payload alertmanager has POSTed. Used by:

@@ -11,12 +11,18 @@ import { randomSignupInput, signupViaApi } from '../src/helpers/signup.ts'
 // at least one `service.name=backend` span. That's the wire shape the Grafana
 // "click an exemplar diamond → open the trace in Tempo" UX depends on.
 //
-// The spec self-skips when the local observability profile is not running
-// (Prometheus on :9090 or Tempo on :3200 unreachable), matching the
-// slice-3/4/5 pattern of "fail quietly when the optional stack is down".
-// CI today does not bring up the observability profile alongside the e2e
-// container, so this spec skips in CI and runs locally — same behaviour as
+// The spec self-skips when the obs cluster is not running (Prometheus
+// on :9090 or Tempo on :3200 unreachable), matching the slice-3/4/5
+// pattern of "fail quietly when the optional stack is down". CI today
+// does not bring up the obs cluster alongside the e2e container, so
+// this spec skips in CI and runs locally — same behaviour as
 // `observability.frontend-traces.spec.ts`.
+//
+// Slice 22b retargets this spec at the obs cluster: `:9090` (Prometheus)
+// and `:3200` (Tempo) reach the obs cluster Services via the Lima
+// portForwards declared in `infra/lima/obs.yaml`. The host ports match
+// the compose-era values 1:1, so URL constants are unchanged — only
+// this header comment is updated.
 
 const PROMETHEUS_BASE_URL = 'http://localhost:9090'
 const TEMPO_BASE_URL = 'http://localhost:3200'

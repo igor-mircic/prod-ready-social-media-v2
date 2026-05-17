@@ -6,41 +6,52 @@ import { setTimeout as wait } from 'node:timers/promises'
 import { test, expect } from '../src/fixtures/test.ts'
 import { randomSignupInput, signupViaApi } from '../src/helpers/signup.ts'
 
-// This spec proves the slice-7 chain end-to-end: a browser running with
-// telemetry + error reporting enabled navigates to the dev-only
+// This spec proves the slice-7 chain end-to-end: a browser running
+// with telemetry + error reporting enabled navigates to the dev-only
 // `/__dev/throw` route, the React error boundary catches the thrown
 // `Error` (whose message embeds a JWT-shaped substring), and the
-// captured error reaches all three sinks via the Collector:
+// captured error reaches all three sinks via the obs cluster:
 //
-//   - Collector `/metrics` (Prometheus exposition) — the
-//     `frontend_errors_total{kind="boundary"}` counter increments.
-//   - Loki `/loki/api/v1/query_range` — one log line under
-//     `{event_dataset="frontend.error"}` with `error.type=Error`.
-//   - Tempo `/api/search` — one trace with a `service.name=frontend`
-//     span carrying an `exception` event.
+//   - obs Prometheus (`:9090`) — the `frontend_errors_total{
+//     kind="boundary"}` counter increments. (Slice 22b retired the
+//     compose collector's host-side `:8889` Prometheus-format
+//     exposition per design.md Decision 3; the obs collector does
+//     NOT expose a host-reachable `/metrics` endpoint. Counter
+//     reaches obs prom via OTLP/remote-write.)
+//   - obs Loki (`:3100`) `/loki/api/v1/query_range` — one log line
+//     under `{event_dataset="frontend.error"}` with
+//     `error.type=Error`.
+//   - obs Tempo (`:3200`) `/api/search` — one trace with a
+//     `service.name=frontend` span carrying an `exception` event.
+//
+// All three host ports reach the obs cluster Services via the Lima
+// portForwards declared in `infra/lima/obs.yaml` (slice 22b).
 //
 // PII: the asserted log line and span event MUST contain `[REDACTED]`
 // and MUST NOT contain the original JWT substring (defence-in-depth
 // scrub: SDK-side regex strip + Collector OTTL replace_pattern).
 //
-// The spec self-skips when any of Collector / Loki / Tempo APIs are
-// unreachable, mirroring the slice-5 and slice-6 patterns.
+// The spec self-skips when any of obs Prometheus / Loki / Tempo APIs
+// are unreachable, mirroring the slice-5 and slice-6 patterns.
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const FRONTEND_DIR = resolve(__dirname, '../../frontend')
 
-// 5173 is the only Vite-dev origin in the Collector's CORS allowlist.
-// `--host localhost` matches the allowlist exactly (CORS treats
-// localhost and 127.0.0.1 as distinct origins).
 const TELEMETRY_PORT = 5173
 const TELEMETRY_URL = `http://localhost:${TELEMETRY_PORT}`
-const COLLECTOR_PROM_URL = 'http://localhost:8889/metrics'
+const PROMETHEUS_BASE_URL = 'http://localhost:9090'
 const LOKI_BASE_URL = 'http://localhost:3100'
 const TEMPO_BASE_URL = 'http://localhost:3200'
 
 const PROBE_TIMEOUT_MS = 2_000
 const DEV_SERVER_READY_TIMEOUT_MS = 30_000
-const POLL_BUDGET_MS = 45_000
+// Account for the slice-22b shift from collector-scrape (~immediate)
+// to obs-prom-via-OTLP-remote-write (one full SDK export + one
+// remote-write round-trip). 60 s is enough for prom to observe at
+// least one sample under the slice's 15 s scrape default; the spec's
+// own override (`VITE_OTEL_METRICS_EXPORT_INTERVAL_MS=2000`) keeps
+// the SDK side fast.
+const POLL_BUDGET_MS = 60_000
 const POLL_INTERVAL_MS = 1_000
 
 // Match the JWT substring the dev component throws (see
@@ -131,16 +142,30 @@ async function pollUntil<T>(
   throw new Error(`${diagnosticLabel} did not satisfy within ${POLL_BUDGET_MS}ms.`)
 }
 
-async function pollCollectorMetricsBody(
-  predicate: (body: string) => boolean,
-  label: string,
-): Promise<string> {
+interface PromQueryResponse {
+  data?: {
+    result?: Array<{
+      value?: [number, string]
+    }>
+  }
+}
+
+async function pollPromForFrontendErrorCounter(): Promise<number> {
+  const url = `${PROMETHEUS_BASE_URL}/api/v1/query?query=${encodeURIComponent(
+    'frontend_errors_total{service_name="frontend",kind="boundary"}',
+  )}`
   return pollUntil(async () => {
-    const res = await fetch(COLLECTOR_PROM_URL)
+    const res = await fetch(url)
     if (!res.ok) return undefined
-    const body = await res.text()
-    return predicate(body) ? body : undefined
-  }, label)
+    const body = (await res.json()) as PromQueryResponse
+    for (const sample of body.data?.result ?? []) {
+      const raw = sample.value?.[1]
+      if (!raw) continue
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed >= 1) return parsed
+    }
+    return undefined
+  }, 'frontend_errors_total{kind="boundary"} >= 1 in obs prom')
 }
 
 interface LokiQueryRangeResponse {
@@ -246,12 +271,12 @@ async function pollTempoForFrontendException(): Promise<ExceptionEvent> {
 
 test.describe('observability — frontend errors pipeline', () => {
   test.beforeAll(async () => {
-    const [collectorOk, lokiOk, tempoOk] = await Promise.all([
-      probeReachable(COLLECTOR_PROM_URL),
+    const [promOk, lokiOk, tempoOk] = await Promise.all([
+      probeReachable(`${PROMETHEUS_BASE_URL}/-/healthy`),
       probeReachable(`${LOKI_BASE_URL}/ready`),
       probeReachable(`${TEMPO_BASE_URL}/ready`),
     ])
-    observabilityReachable = collectorOk && lokiOk && tempoOk
+    observabilityReachable = promOk && lokiOk && tempoOk
     if (!observabilityReachable) return
 
     viteProcess = startTelemetryEnabledDevServer()
@@ -281,7 +306,7 @@ test.describe('observability — frontend errors pipeline', () => {
   }) => {
     test.skip(
       !observabilityReachable,
-      'Observability profile not up (Collector :8889/metrics, Loki /ready, or Tempo /ready unreachable)',
+      'Obs cluster not up (Prometheus :9090 /-/healthy, Loki :3100 /ready, or Tempo :3200 /ready unreachable)',
     )
     test.setTimeout(180_000)
 
@@ -314,17 +339,9 @@ test.describe('observability — frontend errors pipeline', () => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
 
-    // Counter sink — Collector Prometheus exposition.
-    const collectorBody = await pollCollectorMetricsBody(
-      (body) =>
-        /^frontend_errors_total\{[^}]*kind="boundary"[^}]*\}\s+[1-9]/m.test(
-          body,
-        ),
-      'frontend_errors_total{kind="boundary"} >= 1',
-    )
-    expect(collectorBody).toMatch(
-      /^frontend_errors_total\{[^}]*kind="boundary"[^}]*\}\s+[1-9]/m,
-    )
+    // Counter sink — obs Prometheus query.
+    const counterValue = await pollPromForFrontendErrorCounter()
+    expect(counterValue).toBeGreaterThanOrEqual(1)
 
     // Log sink — Loki query under the FE error dataset.
     const lokiLine = await pollLokiForFrontendError()

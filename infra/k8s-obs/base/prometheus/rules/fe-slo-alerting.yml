@@ -32,7 +32,7 @@ groups:
           service: frontend
         annotations:
           summary: "LCP burning 30d budget very fast (fast-burn)."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/LcpSloFastBurn.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/LcpSloFastBurn.md"
 
       - alert: LcpSloSlowBurn
         expr: |
@@ -46,7 +46,7 @@ groups:
           service: frontend
         annotations:
           summary: "LCP burning 30d budget fast (slow-burn page)."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/LcpSloSlowBurn.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/LcpSloSlowBurn.md"
 
       - alert: InpSloFastBurn
         expr: |
@@ -60,7 +60,7 @@ groups:
           service: frontend
         annotations:
           summary: "INP burning 30d budget very fast (fast-burn)."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/InpSloFastBurn.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/InpSloFastBurn.md"
 
       - alert: InpSloSlowBurn
         expr: |
@@ -74,4 +74,4 @@ groups:
           service: frontend
         annotations:
           summary: "INP burning 30d budget fast (slow-burn page)."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/InpSloSlowBurn.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/InpSloSlowBurn.md"

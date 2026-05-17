@@ -18,12 +18,11 @@
 # (called out in `infra/k8s/overlays/hetzner/kustomization.yaml`).
 #
 # Custom queries: `pg_stat_statements` projection comes from
-# `infra/observability/postgres-exporter/queries.yaml` (the
-# compose source of truth — same file is mounted into the
-# compose container). Slice 22a sources it via a kustomize
-# `configMapGenerator` (see sibling kustomization.yaml); slice
-# 22b will move queries.yaml under `infra/k8s/base/postgres-
-# exporter/` when the compose copy retires.
+# `infra/k8s/base/postgres-exporter/queries.yaml` (sibling of
+# this Deployment; relocated to its consumer-local home in
+# slice 22b). The kustomize `configMapGenerator` in the sibling
+# `kustomization.yaml` materialises it into a ConfigMap mounted
+# at `/etc/postgres-exporter/`.
 #
 # Probes use the bare `/` path on the metrics port. The
 # `postgres-exporter` image's root path returns a small HTML

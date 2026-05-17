@@ -31,9 +31,10 @@ logging:
   # Env-var gated: when LOG_FILE_PATH is unset (the default), the
   # placeholder resolves to an empty string and Spring Boot creates no
   # file appender — the dev loop stays stdout-only. When set (e.g.
-  # ./infra/observability/logs/backend.json), Spring Boot writes the
-  # same ECS JSON lines to that file alongside stdout, and the OTel
-  # Collector's filelog receiver tails them into Loki.
+  # /tmp/backend.json), Spring Boot writes the same ECS JSON lines
+  # to that file alongside stdout. The slice-20 in-k3s log-agent
+  # DaemonSet tails pod stdout into Loki; the file appender is a
+  # developer inspection tool for host bootRun.
   file:
     name: ${LOG_FILE_PATH:}
 

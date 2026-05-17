@@ -1,64 +1,39 @@
-# In-cluster OpenTelemetry Collector pipeline (slice 18a / 18b / 18c / 19).
+# In-cluster OpenTelemetry Collector pipeline (slice 18a / 18b / 18c / 19 / 22b).
 #
-# Three pipelines, each DUAL-WRITING to compose AND obs destinations:
+# Three pipelines, each writing to a single obs-cluster destination:
 #   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — in-cluster only,
 #                  the frontend pod's nginx reverse-proxies `/v1/*`
 #                  to this receiver per slice 18c)
 #     -> batch
 #     -> traces:  transform/redact-path-ids
-#                 -> otlp/compose-relay      (host.lima.internal:4317,  plaintext)
-#                 -> otlp/obs-cluster        (host.lima.internal:14317, mTLS, slice 19)
+#                 -> otlp/obs-cluster        (host.lima.internal:14317, mTLS)
 #     -> logs:    transform/redact-path-ids, filter/exclude_observability_self
-#                 -> otlphttp/compose-relay-logs  (http://host.lima.internal:4318,   plaintext)
-#                 -> otlphttp/obs-cluster-logs    (https://host.lima.internal:14318, mTLS, slice 19)
+#                 -> otlphttp/obs-cluster-logs    (https://host.lima.internal:14318, mTLS)
 #     -> metrics: (batch only; FE web-vitals have no PII / no path data)
-#                 -> otlphttp/compose-relay-metrics (http://host.lima.internal:4318,   plaintext)
-#                 -> otlphttp/obs-cluster-metrics   (https://host.lima.internal:14318, mTLS, slice 19)
+#                 -> otlphttp/obs-cluster-metrics   (https://host.lima.internal:14318, mTLS)
 #
-# Slice 19 (add-cross-cluster-mtls) wraps the three `*obs-cluster*`
-# exporters in mTLS against a shared self-signed CA (cert material
-# produced by `just obs-certs`; mounted at /etc/otelcol-contrib/certs/
-# via a Kustomize secretGenerator-produced Secret). The compose-relay
-# exporters STAY plaintext — that path is local-mirror-only and dies
-# in slice 22 (`retire-compose-observability`); layering mTLS on it
-# would be churn-for-zero-benefit. After slice 22 collapses dual-write
-# to obs-only, every exporter remaining in this file is TLS-wrapped.
+# Slice 22b (`retire-compose-observability`) collapsed the slice-18a/18b/18c
+# dual-write fan-out: the three `*compose-relay*` exporters (plaintext, targeting
+# the now-deleted compose collector at `host.lima.internal:4317`/`:4318`) were
+# removed in lock-step with the compose `observability` profile deletion. The
+# three surviving `*obs-cluster*` exporters all carry mTLS against the shared
+# self-signed CA (slice 19; cert material produced by `just obs-certs`,
+# mounted at `/etc/otelcol-contrib/certs/` via a Kustomize secretGenerator-
+# produced Secret).
 #
-# Slice 18b added the second traces exporter (compose + obs). Slice 18c
-# adds the logs and metrics pipelines symmetrically: every browser
-# OTLP signal now arrives on this collector via the FE pod's nginx
-# `/v1/` reverse-proxy and fans out to BOTH destinations. The compose
-# receiver-side pipelines already accept all three signal types on the
-# same `:4318` listener; the dual-write here keeps compose grafana and
-# obs grafana side-by-side comparable until slice 22 retires the
-# compose path.
+# Slice 18b stood up the obs traces exporter alongside the compose-relay.
+# Slice 18c added the logs and metrics legs symmetrically. Every browser
+# OTLP signal arrives here via the FE pod's nginx `/v1/` reverse-proxy and
+# is now forwarded to the obs cluster only.
 #
-# Exporters have independent retry / queue / failure state — a wedged
-# obs collector does NOT block the compose path or vice-versa. This
-# mirrors the slice-17 design's "build the new house before tearing
-# down the old one" sequencing: compose grafana keeps showing exactly
-# what it shows today, obs grafana grows the same view alongside it,
-# and slice 22 (`retire-compose-observability`) drops every
-# `*compose-relay*` exporter and collapses dual-write back to
-# single-exporter (obs-only).
-#
-# Three collectors share the `transform/redact-path-ids` OTTL
-# block byte-for-byte until slice 22:
-#   - compose at `infra/observability/collector/collector-config.yaml`
+# Two collectors share the `transform/redact-path-ids` OTTL block byte-for-byte:
 #   - app cluster at this file
 #   - obs cluster at `infra/k8s-obs/base/collector/configmap.yaml`
-# If you edit one set of OTTL statements, you MUST edit the other
-# two in the same commit, otherwise BE-in-k3s traffic gets
-# asymmetric redaction across destinations. Slice 18c also updates
-# every site to target `attributes["url.path"]` (the attribute the
-# modern OTel Java agent actually emits) alongside the deprecated
-# `http.url` / `http.target` / `url.full` keys.
-#
-# Dual-write is local-only — `infra/k8s/overlays/hetzner/kustomization.yaml`
-# explicitly notes that Hetzner MUST NOT inherit dual-write
-# (slice 22 collapses it before any prod cutover; doubling
-# outbound trace volume from the app cluster in prod is a
-# non-trivial bandwidth cost we don't want by accident).
+# If you edit one set of OTTL statements, you MUST edit the other in the
+# same commit, otherwise BE-in-k3s traffic gets asymmetric redaction across
+# destinations. Slice 18c targets `attributes["url.path"]` (the attribute
+# the modern OTel Java agent actually emits) alongside the deprecated
+# `http.url` / `http.target` / `url.full` keys for defence-in-depth.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -77,18 +52,15 @@ data:
       # postgres-exporter (`infra/k8s/base/postgres-exporter/`)
       # in Prometheus-format and emit OTLP internally so its
       # `pg_*` series flow through the same `batch` processor
-      # and the same dual-write fan-out as every other metric
-      # family. Joining the scrape here (rather than as a
-      # native scrape job on either prometheus instance) keeps
-      # both compose prom and obs prom seeing the same series
-      # under the same labels during the parity window.
+      # as every other metric family. Joining the scrape here
+      # (rather than as a native scrape job on the obs prom)
+      # keeps the obs prom seeing the same `pg_*` series under
+      # the same labels the compose prom saw pre-22b.
       #
       # Single target, single job — the contrib distribution
       # (image `otel/opentelemetry-collector-contrib:0.111.0`)
-      # ships the `prometheus` receiver. Retires when slice 22b
-      # drops the compose `postgres-exporter` and the dual-write
-      # collapses to obs-only; at that point this receiver can
-      # stay (it is the only path to `pg_*` for the obs prom).
+      # ships the `prometheus` receiver. Post-22b this remains
+      # the only path delivering `pg_*` series to obs prom.
       prometheus/postgres-exporter:
         config:
           scrape_configs:
@@ -168,30 +140,15 @@ data:
         endpoint: 0.0.0.0:13133
 
     exporters:
-      # Slice-15 host-alias bridge to the compose collector's
-      # published OTLP/gRPC port. Slice 18b
-      # (`bridge-collectors-to-obs-cluster`) keeps this exporter
-      # in place during the transition window (alongside the new
-      # `otlp/obs-cluster` exporter below) so the operator can
-      # open compose grafana and obs grafana side-by-side and
-      # confirm identical backend traces. Slice 22
-      # (`retire-compose-observability`) drops this exporter and
-      # the corresponding `otlp/compose-relay` entry from the
-      # traces pipeline's `exporters:` list.
-      otlp/compose-relay:
-        endpoint: host.lima.internal:4317
-        tls:
-          insecure: true
-
-      # Slice 18b cross-cluster path, slice 19 wraps it in mTLS.
+      # Slice 18b cross-cluster traces path, slice 19 wraps it in mTLS.
       # `host.lima.internal:14317` is the local mirror of the
       # Hetzner reality (the obs box's tailscale / private-network
       # IP). Lima publishes the obs VM's :4317 as host :14317 (see
       # `infra/lima/obs.yaml` portForwards); klipper-lb inside the
       # obs VM terminates the LoadBalancer Service `collector` on
       # :4317 and routes to the obs cluster's collector pod. The
-      # +10000 offset avoids collision with the compose collector's
-      # already-published host :4317.
+      # `+10000` offset on the obs host-side ports is symmetric with
+      # the apiserver disambiguation (app `:16443`, obs `:16444`).
       #
       # Slice 19: the endpoint stays scheme-less — OTLP/gRPC clients
       # in the otelcol exporter pick the TLS transport based on the
@@ -206,18 +163,10 @@ data:
           ca_file: /etc/otelcol-contrib/certs/ca.crt
           insecure: false
 
-      # Slice 18c logs / metrics dual-write. OTLP/HTTP because the
-      # compose collector's `:4318` listener already accepts all three
-      # signal types from slices 5/6/7. The `+10000` offset on the obs
-      # exporters matches the traces convention and the
-      # `infra/lima/obs.yaml` portForward. Slice 19 wraps both obs-
-      # cluster OTLP/HTTP exporters in mTLS (https:// scheme + same
-      # four `tls:` keys as the gRPC exporter); the two compose-relay
-      # OTLP/HTTP exporters stay plaintext.
-      otlphttp/compose-relay-logs:
-        endpoint: http://host.lima.internal:4318
-        tls:
-          insecure: true
+      # Slice 18c logs / metrics legs. OTLP/HTTP at `+10000` matches
+      # the traces convention and the `infra/lima/obs.yaml` portForward.
+      # Slice 19 wraps both OTLP/HTTP exporters in mTLS (https:// scheme
+      # + same four `tls:` keys as the gRPC exporter).
       otlphttp/obs-cluster-logs:
         endpoint: https://host.lima.internal:14318
         tls:
@@ -225,10 +174,6 @@ data:
           key_file: /etc/otelcol-contrib/certs/client.key
           ca_file: /etc/otelcol-contrib/certs/ca.crt
           insecure: false
-      otlphttp/compose-relay-metrics:
-        endpoint: http://host.lima.internal:4318
-        tls:
-          insecure: true
       otlphttp/obs-cluster-metrics:
         endpoint: https://host.lima.internal:14318
         tls:
@@ -243,11 +188,7 @@ data:
         traces:
           receivers: [otlp]
           processors: [batch, transform/redact-path-ids]
-          # Dual-write: order is not significant for OTel
-          # multi-exporter fan-out (each exporter has independent
-          # retry/queue state), but the list is alphabetized for
-          # stable diffs.
-          exporters: [otlp/compose-relay, otlp/obs-cluster]
+          exporters: [otlp/obs-cluster]
         logs:
           receivers: [otlp]
           # `filter/exclude_observability_self` runs LAST so the
@@ -255,11 +196,11 @@ data:
           # emits them; the drop happens only after the auditable
           # redaction has run.
           processors: [batch, transform/redact-path-ids, filter/exclude_observability_self]
-          exporters: [otlphttp/compose-relay-logs, otlphttp/obs-cluster-logs]
+          exporters: [otlphttp/obs-cluster-logs]
         metrics:
           # Slice 22a (migrate-obs-content) added `prometheus/postgres-exporter`
-          # alongside `otlp` here — same fan-out, same processors. The
-          # receiver list is alphabetised for stable diffs.
+          # alongside `otlp` here — same processors, same exporter.
+          # The receiver list is alphabetised for stable diffs.
           receivers: [otlp, prometheus/postgres-exporter]
           # No path redaction on metrics: FE web-vitals attributes are
           # web-vitals shaped (`route`, `metric.name`), and the
@@ -267,4 +208,4 @@ data:
           # `frontend/src/observability/route-timing.tsx` already
           # collapses dynamic segments to placeholders.
           processors: [batch]
-          exporters: [otlphttp/compose-relay-metrics, otlphttp/obs-cluster-metrics]
+          exporters: [otlphttp/obs-cluster-metrics]

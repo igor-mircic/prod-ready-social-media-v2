@@ -36,7 +36,7 @@ resources:
 #
 # Slice 22a added `backend-overview`, `frontend-overview`,
 # `database-overview` (byte-similar copies of the compose-side
-# dashboards under `infra/observability/grafana/dashboards/`).
+# dashboards; the compose source was deleted in slice 22b).
 # Datasource UIDs already match (`prometheus` on both sides since
 # slice 18b) and the compose dashboards carry no `host.docker.internal`
 # `instance=...` selectors, so the JSON files are byte-identical

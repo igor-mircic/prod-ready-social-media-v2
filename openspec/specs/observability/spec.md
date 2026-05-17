@@ -106,84 +106,6 @@ The backend SHALL rely on Spring Boot's auto-instrumentation of the WebMvc layer
 - **THEN** the `uri` label is the literal string `/api/v1/users/{userId}`
 - **AND** the `uri` label is NOT the resolved UUID (which would be a high-cardinality footgun).
 
-### Requirement: Prometheus scrape configuration lives in `infra/observability/prometheus/`
-
-The repository SHALL include `infra/observability/prometheus/prometheus.yml` declaring exactly one scrape job named `backend` targeting `host.docker.internal:8080` at metrics path `/actuator/prometheus` with a 15-second scrape interval. The file SHALL include a comment documenting the Linux-host workaround (`extra_hosts: ["host.docker.internal:host-gateway"]` on the prometheus compose service, or `network_mode: host`).
-
-#### Scenario: Prometheus config declares the backend scrape job
-
-- **WHEN** a reader inspects `infra/observability/prometheus/prometheus.yml`
-- **THEN** the file contains exactly one entry under `scrape_configs:`
-- **AND** the entry's `job_name` is `backend`
-- **AND** the entry's `metrics_path` is `/actuator/prometheus`
-- **AND** the entry's `scrape_interval` is `15s`
-- **AND** the entry's target is `host.docker.internal:8080`.
-
-### Requirement: Grafana provisioning lives in `infra/observability/grafana/`
-
-The repository SHALL include Grafana provisioning files such that a freshly-started Grafana container loads its Prometheus datasource and its dashboards without any UI clickops.
-
-- `infra/observability/grafana/provisioning/datasources/prometheus.yaml` SHALL declare one datasource named `Prometheus` of type `prometheus`, URL `http://prometheus:9090`, `isDefault: true`, `editable: false`.
-- `infra/observability/grafana/provisioning/dashboards/dashboards.yaml` SHALL declare one provider named `default` of type `file`, path `/etc/grafana/dashboards`, `allowUiUpdates: false`.
-
-#### Scenario: Provisioning files declare the datasource and dashboard provider
-
-- **WHEN** a reader inspects `infra/observability/grafana/provisioning/`
-- **THEN** `datasources/prometheus.yaml` declares one Prometheus datasource set as default and as non-editable
-- **AND** `dashboards/dashboards.yaml` declares one file-based dashboard provider pointing at `/etc/grafana/dashboards`.
-
-### Requirement: One provisioned dashboard renders RED, DB, JVM, and business panels
-
-The repository SHALL include `infra/observability/grafana/dashboards/backend-overview.json` — a single provisioned Grafana dashboard titled `Backend overview` carrying panels for:
-
-- HTTP request rate by `uri`,
-- HTTP 4xx rate by `uri`,
-- HTTP 5xx rate by `uri`,
-- HTTP p50 / p95 / p99 duration by `uri`,
-- HikariCP active / idle / pending connections,
-- JVM heap used (by pool),
-- JVM GC pause time rate,
-- p95 latency of each of the four custom business timers (`feed.fanout.duration`, `feed.read.duration`, `posts.create.duration`, `follows.follow.duration`).
-
-Every PromQL `by (...)` clause in the dashboard SHALL group only by bounded label sets (`uri`, `method`, `status`, `area`, `id`, `le`). No panel SHALL group by `userId`, `post_id`, `email`, or any other high-cardinality label.
-
-#### Scenario: Dashboard JSON contains the listed panel titles
-
-- **WHEN** a reader greps `infra/observability/grafana/dashboards/backend-overview.json` for panel titles
-- **THEN** every panel listed above is present as a `"title"` field in the JSON.
-
-#### Scenario: No PromQL query groups by a high-cardinality label
-
-- **WHEN** a reader inspects every `"expr"` field in `backend-overview.json`
-- **THEN** no `by (...)` clause references `userId`, `post_id`, `email`, or any equivalent unbounded id label.
-
-### Requirement: Observability stack starts under the `observability` docker-compose profile
-
-The repository's `docker-compose.yml` SHALL declare two services under `profiles: ["observability"]`: `prometheus` (image `prom/prometheus:v2.55.1`, port `9090:9090`) and `grafana` (image `grafana/grafana:11.2.0`, port `3000:3000`, `GF_AUTH_ANONYMOUS_ENABLED=true`, `GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer`, `depends_on: [prometheus]`). The default `docker-compose up` invocation SHALL continue to start only `postgres`.
-
-#### Scenario: Default invocation starts only postgres
-
-- **WHEN** an operator runs `docker-compose up -d` with no profile flag
-- **THEN** only the `postgres` service starts.
-
-#### Scenario: Observability profile starts the additional services
-
-- **WHEN** an operator runs `docker-compose --profile observability up -d`
-- **THEN** the `postgres`, `prometheus`, and `grafana` services all start
-- **AND** Grafana on `http://localhost:3000` lands on an anonymous Viewer session without a login prompt.
-
-### Requirement: README documents the local observability run loop
-
-The repository's `README.md` SHALL include a `## Local observability` section after the existing `## Posting locally` section. The section SHALL document the `docker-compose --profile observability up -d prometheus grafana` invocation, the Grafana URL (`http://localhost:3000`) with the landing dashboard name (`Backend overview`), and the Prometheus URL (`http://localhost:9090`). The section SHALL state that anonymous viewer access is for local dev only.
-
-#### Scenario: README documents the run loop
-
-- **WHEN** a reader inspects the top-level `README.md`
-- **THEN** the document contains a `## Local observability` section
-- **AND** the section names the `docker-compose --profile observability up` invocation
-- **AND** the section names the Grafana URL and the landing dashboard
-- **AND** the section names the Prometheus URL.
-
 ### Requirement: Integration test proves the metrics surface end-to-end
 
 The `backend/` project SHALL include a Testcontainers integration test `backend/src/test/java/com/prodready/social/observability/MetricsActuatorIT.java` that boots the full Spring context against a Testcontainers Postgres and asserts:
@@ -601,96 +523,6 @@ The customizer SHALL NOT introduce a `logback-spring.xml` or a `logback.xml` and
 - **THEN** the directory contains neither `logback-spring.xml` nor `logback.xml`
 - **AND** `backend/build.gradle.kts` declares no dependency on `net.logstash.logback:logstash-logback-encoder`.
 
-### Requirement: Tempo is provisioned under the `observability` docker-compose profile and as a Grafana datasource
-
-The repository's `docker-compose.yml` SHALL declare one service
-`tempo` under `profiles: ["observability"]` using the image
-`grafana/tempo:2.6.1`, mounting
-`./infra/observability/tempo/tempo.yaml` to `/etc/tempo.yaml`,
-exposing host port `3200:3200` (HTTP API only — the OTLP receiver
-host port bindings from slice 3 are retired by slice 4 in favour of
-the Collector taking over `4317:4317` and `4318:4318`), and starting
-with `-config.file=/etc/tempo.yaml`. Tempo's OTLP receivers continue
-to listen inside the container on `4317` and `4318` and are
-reachable from inside the docker network as `tempo:4317` and
-`tempo:4318` (the Collector's `otlp/tempo` exporter targets
-`tempo:4317`). The existing `grafana` service's `depends_on` list
-SHALL include `tempo` (in addition to the slice-1 `prometheus` and
-the slice-4 `loki` and `collector` dependencies). The default
-`docker-compose up` invocation (with no profile flag) SHALL continue
-to start only `postgres`.
-
-The repository SHALL include `infra/observability/tempo/tempo.yaml`
-declaring an OTLP receiver enabled on both gRPC (`0.0.0.0:4317`) and
-HTTP (`0.0.0.0:4318`), local-filesystem WAL and blocks storage under
-`/var/tempo`, the HTTP API on `0.0.0.0:3200`, and a 1-hour block
-retention. The file SHALL carry an inline comment marking the
-local-filesystem storage choice as a learning-project default and
-forward-referencing object-storage backends for production.
-
-The repository SHALL include
-`infra/observability/grafana/provisioning/datasources/tempo.yaml`
-declaring one datasource named `Tempo` of type `tempo` at URL
-`http://tempo:3200`, with `editable: false` and `isDefault: false`
-(the Prometheus datasource from slice 1 remains the default). The
-file SHALL declare a `tracesToLogs` (or equivalent
-`tracesToLogsV2` per Grafana version) correlation block targeting
-the slice-4 `Loki` datasource by name, keyed on the `trace.id` span
-tag so that opening a Tempo span in Grafana presents a one-click
-pivot to the matching Loki log lines.
-
-#### Scenario: Default invocation still starts only postgres (preserved across slice 4)
-
-- **WHEN** an operator runs `docker-compose up -d` with no profile flag
-- **THEN** only the `postgres` service starts.
-
-#### Scenario: Observability profile starts tempo alongside the other observability services
-
-- **WHEN** an operator runs `docker-compose --profile observability up -d`
-- **THEN** the `postgres`, `prometheus`, `grafana`, `tempo`,
-  `collector`, and `loki` services all start
-- **AND** Tempo's HTTP API on `http://localhost:3200/ready` returns
-  a 200 once the container has finished initial startup
-- **AND** no process on the host is listening on ports `4317` or
-  `4318` other than the slice-4 Collector container's bindings.
-
-#### Scenario: Tempo configuration declares OTLP receivers and local storage
-
-- **WHEN** a reader inspects `infra/observability/tempo/tempo.yaml`
-- **THEN** the file enables an OTLP receiver listening on
-  `0.0.0.0:4317` (gRPC) and `0.0.0.0:4318` (HTTP)
-- **AND** the file declares local-filesystem WAL and blocks storage
-  rooted at `/var/tempo`
-- **AND** the file exposes Tempo's HTTP API on `0.0.0.0:3200`
-- **AND** the file carries an inline comment marking
-  local-filesystem storage as a learning-project default.
-
-#### Scenario: Grafana datasource provisioning declares Tempo as non-default with traces-to-logs correlation
-
-- **WHEN** a reader inspects
-  `infra/observability/grafana/provisioning/datasources/tempo.yaml`
-- **THEN** the file declares one datasource named `Tempo` of type
-  `tempo`
-- **AND** the URL is `http://tempo:3200`
-- **AND** `editable` is `false`
-- **AND** `isDefault` is `false`
-- **AND** the file declares a `tracesToLogs` (or `tracesToLogsV2`)
-  correlation entry whose `datasourceUid` (or named target)
-  references the slice-4 `Loki` datasource
-- **AND** the file does NOT carry the slice-3 inline comment
-  forward-referencing the slice-4 `tracesToLogs` block (the block
-  is now present, not forward-referenced).
-
-#### Scenario: Backend overview dashboard retains the Recent traces panel
-
-- **WHEN** a reader inspects
-  `infra/observability/grafana/dashboards/backend-overview.json`
-- **THEN** the dashboard still declares the slice-3 panel titled
-  `Recent traces`
-- **AND** the panel's datasource is `Tempo`
-- **AND** the panel's query targets
-  `{ resource.service.name = "backend" }` in TraceQL.
-
 ### Requirement: README documents the local distributed-tracing run loop
 
 The repository's `README.md` SHALL include a `### Distributed tracing` subsection under the existing `## Local observability` section, after the existing `### Structured logs` subsection. The subsection SHALL document:
@@ -731,210 +563,47 @@ The test SHALL NOT boot a Tempo container, SHALL NOT make any network call to `h
 
 ### Requirement: Backend writes ECS JSON log events to an env-var-gated file in addition to stdout
 
-The `backend/` project SHALL extend
-`backend/src/main/resources/application.yaml` so that, when the
-environment variable `LOG_FILE_PATH` is set to a non-empty value, every
-log event is appended as one ECS JSON line to the file at that path in
-addition to the existing stdout emission. The file output SHALL use
-`logging.structured.format.file: ecs` so the file lines are
-byte-identical to the corresponding stdout lines. When `LOG_FILE_PATH`
-is unset or empty, no file appender SHALL engage and the dev loop SHALL
-be byte-identical to slice 2 / slice 3 behaviour. The file appender
-SHALL NOT introduce a `logback-spring.xml`, a `logback.xml`, or any
-dependency on `net.logstash.logback:logstash-logback-encoder` (the
-existing slice-2 prohibitions are preserved).
+The `backend/` project SHALL extend `backend/src/main/resources/application.yaml` so that, when the environment variable `LOG_FILE_PATH` is set to a non-empty value, every log event is appended as one ECS JSON line to the file at that path in addition to the existing stdout emission. The file output SHALL use `logging.structured.format.file: ecs` so the file lines are byte-identical to the corresponding stdout lines. When `LOG_FILE_PATH` is unset or empty, no file appender SHALL engage and the dev loop SHALL be byte-identical to slice 2 / slice 3 behaviour. The file appender SHALL NOT introduce a `logback-spring.xml`, a `logback.xml`, or any dependency on `net.logstash.logback:logstash-logback-encoder` (the existing slice-2 prohibitions are preserved).
+
+The repository SHALL NOT include any committed `infra/observability/logs/` directory or analogous host log-mount point. The `LOG_FILE_PATH` value is opt-in and accepts any writable host path; the README documents `/tmp/backend.json` as the example.
 
 #### Scenario: File appender does not engage by default
 
-- **GIVEN** the backend is started with no `LOG_FILE_PATH` environment
-  variable set
+- **GIVEN** the backend is started with no `LOG_FILE_PATH` environment variable set
 - **WHEN** the backend writes a log event
 - **THEN** the event appears as one ECS JSON line on stdout
-- **AND** no file is created at any path the backend controls.
+- **AND** no file is created at any path the backend controls
 
 #### Scenario: File appender writes ECS JSON when `LOG_FILE_PATH` is set
 
-- **GIVEN** the backend is started with
-  `LOG_FILE_PATH=/some/writable/path/backend.json`
+- **GIVEN** the backend is started with `LOG_FILE_PATH=/some/writable/path/backend.json`
 - **WHEN** the backend writes a log event
 - **THEN** the event appears as one ECS JSON line on stdout
-- **AND** the same event appears as one ECS JSON line appended to
-  `/some/writable/path/backend.json`
-- **AND** the two lines are byte-identical.
+- **AND** the same event appears as one ECS JSON line appended to `/some/writable/path/backend.json`
+- **AND** the two lines are byte-identical
 
 #### Scenario: File lines carry the full ECS field set including correlation fields
 
 - **GIVEN** the backend is started with a non-empty `LOG_FILE_PATH`
-- **WHEN** an authenticated client calls `GET /api/v1/auth/me` with a
-  valid bearer token for user U
-- **THEN** the file contains one line with
-  `event.dataset == "backend.access"`
-- **AND** that line carries the base ECS fields (`@timestamp`,
-  `log.level`, `service.name`, `service.environment`,
-  `process.thread.name`, `log.logger`, `message`, `ecs.version`)
+- **WHEN** an authenticated client calls `GET /api/v1/auth/me` with a valid bearer token for user U
+- **THEN** the file contains one line with `event.dataset == "backend.access"`
+- **AND** that line carries the base ECS fields (`@timestamp`, `log.level`, `service.name`, `service.environment`, `process.thread.name`, `log.logger`, `message`, `ecs.version`)
 - **AND** that line carries a non-blank `request.id`
 - **AND** that line carries a `user.id` equal to U's id as a string
 - **AND** that line carries a 32-character lowercase hex `trace.id`
-- **AND** that line carries a 16-character lowercase hex `span.id`.
+- **AND** that line carries a 16-character lowercase hex `span.id`
 
 #### Scenario: No `logback-spring.xml` is introduced (preserved across slice 4)
 
 - **WHEN** a reader inspects `backend/src/main/resources/`
-- **THEN** the directory contains neither `logback-spring.xml` nor
-  `logback.xml`
-- **AND** `backend/build.gradle.kts` declares no dependency on
-  `net.logstash.logback:logstash-logback-encoder`.
+- **THEN** the directory contains neither `logback-spring.xml` nor `logback.xml`
+- **AND** `backend/build.gradle.kts` declares no dependency on `net.logstash.logback:logstash-logback-encoder`
 
-### Requirement: OpenTelemetry Collector is provisioned under the `observability` docker-compose profile with two pipelines
+#### Scenario: No committed host log-mount directory
 
-The repository's `docker-compose.yml` SHALL declare one new service
-`collector` under `profiles: ["observability"]` using the image
-`otel/opentelemetry-collector-contrib:0.111.0`, mounting
-`./infra/observability/collector/collector-config.yaml` to
-`/etc/otelcol-contrib/config.yaml` and
-`./infra/observability/logs:/var/log/backend:ro`, exposing host ports
-`4317:4317` (OTLP gRPC) and `4318:4318` (OTLP HTTP), and starting with
-`--config=/etc/otelcol-contrib/config.yaml`.
-
-The repository SHALL include
-`infra/observability/collector/collector-config.yaml` declaring:
-
-- one OTLP receiver listening on `0.0.0.0:4317` (gRPC) and
-  `0.0.0.0:4318` (HTTP);
-- one `filelog` receiver tailing `/var/log/backend/*.json` and
-  parsing each line as a JSON object (so the ECS fields land as
-  attributes on the Loki log entry);
-- one `otlp/tempo` exporter targeting `tempo:4317` with TLS
-  disabled (in-network call);
-- one `loki` exporter targeting `http://loki:3100/loki/api/v1/push`;
-- one `batch` processor with default settings, shared by both
-  pipelines;
-- a `traces` pipeline wiring `otlp` receiver → `batch` processor →
-  `otlp/tempo` exporter;
-- a `logs` pipeline wiring `filelog` receiver → `batch` processor →
-  `loki` exporter.
-
-The Collector configuration SHALL set the Loki exporter's
-`labels.attributes` so that each shipped log line carries
-`service_name`, `event.dataset`, and `log.level` as Loki labels (the
-remaining ECS fields are kept inside the JSON body and queried via
-`| json` at read time, so the Loki label cardinality stays bounded).
-
-#### Scenario: Observability profile starts collector alongside the existing services
-
-- **WHEN** an operator runs `docker-compose --profile observability up -d`
-- **THEN** the `postgres`, `prometheus`, `grafana`, `tempo`,
-  `collector`, and `loki` services all start
-- **AND** the Collector's OTLP HTTP endpoint at
-  `http://localhost:4318/v1/traces` accepts a POST.
-
-#### Scenario: Default invocation still starts only postgres (preserved across slice 4)
-
-- **WHEN** an operator runs `docker-compose up -d` with no profile flag
-- **THEN** only the `postgres` service starts.
-
-#### Scenario: Collector configuration declares the two pipelines
-
-- **WHEN** a reader inspects
-  `infra/observability/collector/collector-config.yaml`
-- **THEN** the file declares an OTLP receiver bound on
-  `0.0.0.0:4317` and `0.0.0.0:4318`
-- **AND** the file declares a `filelog` receiver whose `include` glob
-  matches `/var/log/backend/*.json` and whose operators parse each line
-  as JSON
-- **AND** the file declares an `otlp/tempo` exporter targeting
-  `tempo:4317`
-- **AND** the file declares a `loki` exporter targeting
-  `http://loki:3100/loki/api/v1/push`
-- **AND** the `service.pipelines.traces` section wires OTLP receiver →
-  batch → `otlp/tempo` exporter
-- **AND** the `service.pipelines.logs` section wires `filelog`
-  receiver → batch → `loki` exporter.
-
-#### Scenario: Loki label set is bounded
-
-- **WHEN** a reader inspects the `loki` exporter section of
-  `infra/observability/collector/collector-config.yaml`
-- **THEN** the `labels.attributes` (or equivalent) declares exactly
-  the labels `service_name`, `event.dataset`, and `log.level`
-- **AND** no high-cardinality attribute (`request.id`, `user.id`,
-  `trace.id`, `span.id`) appears as a Loki label.
-
-### Requirement: Loki is provisioned under the `observability` docker-compose profile as a Grafana datasource
-
-The repository's `docker-compose.yml` SHALL declare one new service
-`loki` under `profiles: ["observability"]` using the image
-`grafana/loki:3.2.0`, mounting
-`./infra/observability/loki/loki-config.yaml` to
-`/etc/loki/local-config.yaml`, with no host port binding (Loki is
-reachable only from inside the docker network), and starting with
-`-config.file=/etc/loki/local-config.yaml`. The existing `grafana`
-service's `depends_on` list SHALL be extended to include both `loki`
-and `collector` (in addition to the existing `prometheus` and `tempo`
-dependencies from slices 1 and 3).
-
-The repository SHALL include `infra/observability/loki/loki-config.yaml`
-declaring a single-binary Loki configuration with local-filesystem
-storage rooted at `/loki`, the HTTP API on `0.0.0.0:3100`, schema
-config compatible with Loki 3.x, and retention disabled. The file
-SHALL carry an inline comment marking the local-filesystem storage
-and disabled retention as learning-project defaults and
-forward-referencing object-storage backends and a retention period
-for production.
-
-The repository SHALL include
-`infra/observability/grafana/provisioning/datasources/loki.yaml`
-declaring one datasource named `Loki` of type `loki` at
-`http://loki:3100`, with `editable: false` and `isDefault: false`
-(the slice-1 Prometheus datasource remains the default). The file
-SHALL declare a `derivedFields` block that turns any non-blank
-`trace.id` field in a Loki log line into a clickable link to the
-Tempo datasource using the URL template `${__value.raw}`. The
-matching regex SHALL key on the literal JSON key
-`"trace.id":"<value>"` so that the link only appears when a real
-`trace.id` is present (no link on lines emitted outside a span).
-
-#### Scenario: Loki container starts under the observability profile
-
-- **WHEN** an operator runs `docker-compose --profile observability up -d`
-- **THEN** the `loki` service starts
-- **AND** the Loki HTTP API responds 200 to a `/ready` request from
-  inside the docker network at `http://loki:3100/ready`
-- **AND** no host port is bound to the loki container.
-
-#### Scenario: Loki configuration uses local-filesystem storage with disabled retention
-
-- **WHEN** a reader inspects `infra/observability/loki/loki-config.yaml`
-- **THEN** the file declares local-filesystem storage rooted at
-  `/loki`
-- **AND** the file binds the HTTP API on `0.0.0.0:3100`
-- **AND** the file disables retention
-- **AND** the file carries an inline comment marking these as
-  learning-project defaults.
-
-#### Scenario: Grafana datasource provisioning declares Loki as non-default with logs-to-traces correlation
-
-- **WHEN** a reader inspects
-  `infra/observability/grafana/provisioning/datasources/loki.yaml`
-- **THEN** the file declares one datasource named `Loki` of type
-  `loki`
-- **AND** the URL is `http://loki:3100`
-- **AND** `editable` is `false`
-- **AND** `isDefault` is `false`
-- **AND** the file declares a `derivedFields` entry whose regex
-  matches the literal JSON key `"trace.id":"<value>"` in a log line
-  body
-- **AND** that `derivedFields` entry targets the slice-3 `Tempo`
-  datasource by name.
-
-#### Scenario: Backend overview dashboard gains a Recent logs panel
-
-- **WHEN** a reader inspects
-  `infra/observability/grafana/dashboards/backend-overview.json`
-- **THEN** the dashboard declares one new panel titled `Recent logs`
-- **AND** the panel's datasource is `Loki`
-- **AND** the panel's query targets `{service_name="backend"}` and
-  parses each line with `| json` to surface the ECS field set.
+- **WHEN** a reader inspects the repository
+- **THEN** no `infra/observability/logs/` directory exists
+- **AND** no other committed directory is reserved for the backend's `LOG_FILE_PATH` output
 
 ### Requirement: README documents the local log-shipping run loop
 
@@ -1399,30 +1068,6 @@ When metrics are enabled, `bootstrapMetrics()` SHALL register a `PerformanceObse
 - **THEN** no exception is thrown
 - **AND** the rest of `bootstrapMetrics()` (Web Vitals, route timing) registers successfully.
 
-### Requirement: OTel Collector exposes FE metrics via a `prometheus` exporter on `:8889`
-
-The OTel Collector configuration at `infra/observability/collector/collector-config.yaml` SHALL declare a new pipeline `metrics` with:
-
-- the existing `otlp` receiver (no CORS change required — slice 5's allowlist on `:4318` already covers the metrics endpoint at `/v1/metrics`);
-- the `batch` processor (existing);
-- a new `prometheus` exporter listening on `0.0.0.0:8889` with `add_metric_suffixes: false` and `namespace: ""` so emitted metric names are preserved verbatim.
-
-The Collector compose entry in `docker-compose.yml` SHALL publish container port `8889` to host port `8889` so the Prometheus container (and `curl` on the developer's loopback) can reach the exporter.
-
-#### Scenario: Collector exposes a Prometheus scrape endpoint on `:8889`
-
-- **GIVEN** the observability docker-compose profile is up
-- **WHEN** a reader issues `GET http://localhost:8889/metrics`
-- **THEN** the response status is 200
-- **AND** the `Content-Type` header starts with `text/plain` (Prometheus text-exposition format).
-
-#### Scenario: Emitted metric names carry no Collector-added prefix
-
-- **GIVEN** a browser has flushed at least one OTLP metrics export to the Collector
-- **WHEN** a reader inspects the body of `GET http://localhost:8889/metrics`
-- **THEN** at least one line begins with `web_vitals_lcp_bucket`
-- **AND** no line begins with `otelcol_web_vitals_` or any other Collector-injected prefix.
-
 ### Requirement: Collector drops FE metric data points with high-cardinality route labels
 
 The Collector configuration SHALL declare a `filter/drop_high_cardinality` processor in the `metrics` pipeline (between `batch` and `prometheus` exporter) that drops any data point whose `route` attribute matches an unredacted-id pattern: `[0-9a-f]{8,}`, `/[0-9]{4,}/`, or a UUID v4. This guard is defense-in-depth; the primary cardinality control is in `route-timing.tsx` (Requirement: "Route-transition duration is recorded with a route-template label").
@@ -1441,90 +1086,32 @@ The Collector configuration SHALL declare a `filter/drop_high_cardinality` proce
 - **WHEN** the Collector evaluates the processor
 - **THEN** the data point is forwarded to the `prometheus` exporter unchanged.
 
-### Requirement: Prometheus scrapes the Collector as a new `collector` job
-
-The Prometheus configuration at `infra/observability/prometheus/prometheus.yml` SHALL declare a second scrape job named `collector` with `metrics_path: /metrics`, `scrape_interval: 15s`, and `static_configs.targets: ["collector:8889"]`. The existing `backend` job SHALL remain unchanged.
-
-#### Scenario: Prometheus reports the collector target as up
-
-- **GIVEN** the observability profile is up and the Collector is running
-- **WHEN** a reader issues `GET http://localhost:9090/api/v1/targets`
-- **THEN** the response body contains a target whose `labels.job` is `collector`
-- **AND** that target's `health` is `up`.
-
-#### Scenario: Prometheus query returns FE Web Vitals samples after browser traffic
-
-- **GIVEN** at least one browser has loaded the app with metrics enabled and the page has been visible long enough for `web-vitals` to finalise the LCP metric (typically < 5 s after first paint)
-- **AND** at least one Collector → Prometheus scrape cycle has completed
-- **WHEN** a reader queries `GET http://localhost:9090/api/v1/query?query=web_vitals_lcp_bucket{service_name="frontend"}`
-- **THEN** the response's `data.result` array is non-empty.
-
-### Requirement: Grafana provisions a `Frontend overview` dashboard
-
-The repository SHALL include a Grafana dashboard JSON file at `infra/observability/grafana/dashboards/frontend-overview.json` picked up by the existing provisioning provider in `infra/observability/grafana/provisioning/dashboards/dashboards.yaml`. The dashboard SHALL contain at minimum five rows of panels:
-
-- **Web Vitals**: time-series or stat panels for `web_vitals_lcp` p75, `web_vitals_cls` p75, `web_vitals_inp` p75, `web_vitals_fcp` p75, and `web_vitals_ttfb` p75 — each filtered to `service_name="frontend"`.
-- **Route timing**: a time-series panel for `route_change_duration_ms` p50/p95/p99, grouped by the `route` label.
-- **Long tasks**: a time-series panel for the rate of `long_task_duration_ms_count` and a time-series panel for the rate-of-sum of `long_task_duration_ms_sum`.
-- **Browser request volume**: a time-series panel for the rate of `web_vitals_lcp_count` per minute, used as a session-rate proxy.
-- **SLO**: at minimum four panels covering the LCP and INP SLOs:
-  - A stat panel showing LCP "error budget headroom (last 6 h)" computed as `1 - (job:slo_lcp:slow_ratio_rate6h / (1 - 0.95))`, with the panel title or description making the 6 h window explicit.
-  - A stat panel showing INP "error budget headroom (last 6 h)" computed as `1 - (job:slo_inp:slow_ratio_rate6h / (1 - 0.95))`, with the panel title or description making the 6 h window explicit.
-  - A time-series panel showing the current 1 h burn rate for LCP and INP — one line per SLO, computed as `job:slo_lcp:slow_ratio_rate1h / (1 - 0.95)` and `job:slo_inp:slow_ratio_rate1h / (1 - 0.95)`.
-  - A time-series panel showing `histogram_quantile(0.75, sum(rate(web_vitals_lcp_bucket{service_name="frontend"}[5m])) by (le))` and the matching INP query, with a static reference line at 2500 (LCP) and 200 (INP) drawn as a threshold.
-
-The dashboard SHALL declare its data source as the existing provisioned Prometheus datasource, NOT a hard-coded datasource UID. The existing rows (Web Vitals, Route timing, Long tasks, Browser request volume) SHALL be preserved without behavioral change.
-
-#### Scenario: Provisioning surface exposes the dashboard
-
-- **GIVEN** the observability profile is up
-- **WHEN** a reader issues `GET http://localhost:3000/api/search?query=Frontend%20overview`
-- **THEN** the response body contains an entry whose `title` is `Frontend overview`
-
-#### Scenario: Dashboard JSON references the Prometheus datasource by name, not by hard-coded UID
-
-- **WHEN** a reader inspects `infra/observability/grafana/dashboards/frontend-overview.json`
-- **THEN** every panel's `datasource` block either omits the `uid` field or uses the templated form `${DS_PROMETHEUS}` resolved by provisioning
-
-#### Scenario: Dashboard JSON contains the SLO row with panels for LCP and INP
-
-- **WHEN** a reader inspects `infra/observability/grafana/dashboards/frontend-overview.json`
-- **THEN** the dashboard contains a row whose title (or section header) is `SLO`
-- **AND** at least one panel in that row queries `job:slo_lcp:slow_ratio_rate6h` (the LCP budget headroom stat)
-- **AND** at least one panel in that row queries `job:slo_inp:slow_ratio_rate6h` (the INP budget headroom stat)
-- **AND** at least one panel in that row queries both `job:slo_lcp:slow_ratio_rate1h` and `job:slo_inp:slow_ratio_rate1h` (the burn-rate time-series)
-- **AND** at least one panel in that row computes a `histogram_quantile(0.75, ...)` over `web_vitals_lcp_bucket` and another over `web_vitals_inp_bucket`
-
-#### Scenario: Pre-existing rows are preserved
-
-- **WHEN** a reader inspects `infra/observability/grafana/dashboards/frontend-overview.json`
-- **THEN** the dashboard still contains panels matching each row from the previous version (Web Vitals p75 panels for LCP/CLS/INP/FCP/TTFB, the route-timing p50/p95/p99 panel, the long-tasks rate and rate-of-sum panels, and the browser request-volume panel)
-
 ### Requirement: End-to-end test proves the FE → Collector → Prometheus metrics pipeline
 
-The repository SHALL include a Playwright spec at `e2e/tests/observability.frontend-rum-metrics.spec.ts` that drives one authenticated session through the home page and at least one route transition, then asserts the full metrics chain. The spec SHALL be skipped (via `test.skip(...)`) when either of `http://localhost:8889/metrics` or `http://localhost:9090/-/healthy` is unreachable, mirroring the slice-5 pattern that allows the suite to stay green when the observability profile is not running.
-
-#### Scenario: Collector scrape endpoint carries FE-emitted series
-
-- **GIVEN** the observability profile is up
-- **AND** the spec has driven one authenticated session through `/home` and at least one navigation to `/users/{id}`
-- **WHEN** the spec polls `http://localhost:8889/metrics` after the Collector's batch flush interval has elapsed
-- **THEN** the response body contains at least one line beginning with `web_vitals_lcp_bucket` carrying `service_name="frontend"`
-- **AND** the response body contains at least one line beginning with `route_change_duration_ms_bucket` carrying both `service_name="frontend"` and a `route` label whose value is a route template (no resolved id).
+The repository SHALL include a Playwright spec at `e2e/tests/observability.frontend-rum-metrics.spec.ts` that drives one authenticated session through the home page and at least one route transition, then asserts the FE metrics reached prometheus. The spec SHALL be skipped (via `test.skip(...)`) when `http://localhost:9090/-/healthy` is unreachable, matching the slice-5 pattern that keeps the suite green when the obs cluster is not up.
 
 #### Scenario: Prometheus query returns the FE-emitted series
 
-- **GIVEN** the spec has driven the same authenticated traffic
-- **AND** at least 30 s have elapsed since the first observation (one export interval plus one scrape interval)
-- **WHEN** the spec queries `GET http://localhost:9090/api/v1/query?query=web_vitals_lcp_bucket{service_name="frontend"}`
-- **THEN** `data.result` is a non-empty array.
+- **GIVEN** the obs cluster is up and the obs collector's `prometheusremotewrite/in-cluster` exporter is healthy
+- **AND** the spec has driven one authenticated session through `/home` and at least one navigation to `/users/{id}`
+- **WHEN** at least 30 s have elapsed since the first observation (one OTLP export interval plus one prom scrape interval for the remote-write to land and be visible to query)
+- **AND** the spec queries `GET http://localhost:9090/api/v1/query?query=web_vitals_lcp_bucket{service_name="frontend"}`
+- **THEN** the response status is 200
+- **AND** `data.result` is a non-empty array
 
-#### Scenario: Spec is skipped cleanly when observability is not running
+#### Scenario: Prometheus query returns the route timing series
 
-- **GIVEN** the docker-compose `observability` profile is NOT up
-- **AND** either `http://localhost:8889/metrics` or `http://localhost:9090/-/healthy` returns a network error
+- **GIVEN** the same authenticated traffic from the previous scenario
+- **WHEN** the spec queries `GET http://localhost:9090/api/v1/query?query=route_change_duration_ms_bucket{service_name="frontend"}`
+- **THEN** the response status is 200
+- **AND** `data.result` contains at least one sample
+- **AND** every sample's `route` label is a route template (no resolved id — the slice-5/6 redaction contract is preserved end-to-end)
+
+#### Scenario: Spec is skipped cleanly when obs cluster is not running
+
+- **GIVEN** `http://localhost:9090/-/healthy` returns a network error
 - **WHEN** the spec runs
-- **THEN** every test case in the file reports as `skipped`, not `failed`.
+- **THEN** every test case in the file reports as `skipped`, not `failed`
 
 ### Requirement: README documents the local frontend RUM run loop
 
@@ -1973,32 +1560,6 @@ A single `alertmanager` service runs alongside the existing Prometheus, Tempo, L
 - **THEN** `infra/observability/grafana/provisioning/datasources/alertmanager.yaml` declares an Alertmanager datasource targeting `http://alertmanager:9093`
 - **AND** the datasource is marked `isDefault: false`
 - **AND** the datasource implementation is `alertmanager` (so Grafana's built-in Alerting nav reads from it)
-
-### Requirement: Prometheus rule files live in `infra/observability/prometheus/rules/` and are loaded at startup
-
-Recording and alerting rules SHALL be version-controlled under a dedicated directory next to the existing Prometheus configuration. The Prometheus configuration MUST load them via the `rule_files:` block and MUST declare the Alertmanager target via the `alerting:` block, so rule evaluation and alert routing both happen from a Prometheus restart with no further wiring. The `rule_files:` block MUST include the frontend SLO rule files (`fe-slo-recording.yml`, `fe-slo-alerting.yml`) alongside the existing backend rule files (`slo-recording.yml`, `slo-alerting.yml`).
-
-#### Scenario: Prometheus configuration loads the rule files
-
-- **WHEN** `infra/observability/prometheus/prometheus.yml` is read
-- **THEN** the file has a `rule_files:` block that references at least `slo-recording.yml`, `slo-alerting.yml`, `fe-slo-recording.yml`, and `fe-slo-alerting.yml` under `infra/observability/prometheus/rules/`
-
-#### Scenario: Prometheus configuration declares the Alertmanager target
-
-- **WHEN** `infra/observability/prometheus/prometheus.yml` is read
-- **THEN** the file has an `alerting:` block with `alertmanagers:` containing a `static_configs:` target of `alertmanager:9093` on the shared docker network
-
-#### Scenario: Rule files are mounted into the Prometheus container
-
-- **WHEN** the docker-compose `prometheus` service starts under the `observability` profile
-- **THEN** `infra/observability/prometheus/rules/` is mounted read-only into the container at the path referenced by `rule_files:` in `prometheus.yml`
-
-#### Scenario: Frontend SLO rule files appear in the Prometheus rules API
-
-- **GIVEN** the observability profile is up and Prometheus has loaded the rule files
-- **WHEN** a reader issues `GET http://localhost:9090/api/v1/rules`
-- **THEN** the response body contains rule groups whose `file` field matches the mounted path for `fe-slo-recording.yml` and `fe-slo-alerting.yml`
-- **AND** the groups together declare the recording rules `job:slo_lcp:slow_ratio_rate1h` and `job:slo_inp:slow_ratio_rate1h` and the alerting rules `LcpSloFastBurn`, `LcpSloSlowBurn`, `InpSloFastBurn`, `InpSloSlowBurn`
 
 ### Requirement: Recording rules compute per-SLO error-budget ratios over canonical windows
 
@@ -2463,19 +2024,6 @@ Every alerting rule defined under `infra/observability/prometheus/rules/` MUST i
 - **WHEN** `infra/observability/prometheus/rules/fe-slo-alerting.yml` is loaded
 - **THEN** each of the alerts `LcpSloFastBurn`, `LcpSloSlowBurn`, `InpSloFastBurn`, and `InpSloSlowBurn` declares an `annotations.runbook_url:` field
 - **AND** the value is a GitHub blob URL whose path component ends in `/infra/observability/runbooks/<AlertName>.md`
-
-### Requirement: Per-alert runbook stubs live under `infra/observability/runbooks/`
-
-The repository MUST carry one Markdown runbook stub per alert defined in the rule files. Each stub is short (one screen, not a long-form document) and establishes the contract that real incident learnings have a home in the repo.
-
-#### Scenario: Every alert has a runbook stub at the expected path
-- **WHEN** the `infra/observability/runbooks/` directory is listed
-- **THEN** it contains exactly the files `ApiAvailabilityFastBurn.md`, `ApiAvailabilitySlowBurn.md`, `ApiAvailabilityBudgetBurn.md`, `FeedReadLatencyFastBurn.md`, `FeedReadLatencySlowBurn.md`, `PostCreateLatencyFastBurn.md`, `PostCreateLatencySlowBurn.md`, `BackendDown.md`, `LcpSloFastBurn.md`, `LcpSloSlowBurn.md`, `InpSloFastBurn.md`, and `InpSloSlowBurn.md`
-
-#### Scenario: Each runbook stub declares the canonical sections
-- **WHEN** any of the runbook stub files is opened
-- **THEN** the file contains H2 (or H1) headings for `Symptoms`, `Impact`, `Triage`, `Mitigation`, and `Escalation` (in that order)
-- **AND** every heading has at least one non-empty paragraph or bullet beneath it (no empty section)
 
 ### Requirement: End-to-end test proves the routing → webhook delivery → inhibition pipeline
 

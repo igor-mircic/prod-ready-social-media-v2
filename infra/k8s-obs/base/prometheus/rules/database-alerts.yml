@@ -30,7 +30,7 @@ groups:
         annotations:
           summary: "Postgres connection count > 80% of max_connections."
           description: "Active backends on database `social` have exceeded 80% of `max_connections` for at least 5 minutes. The app will start failing to acquire connections soon; investigate before user-visible impact lands."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresConnectionSaturation.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostgresConnectionSaturation.md"
 
       # Any deadlock in the last 5 minutes files a ticket. Deadlocks are
       # usually self-resolving but indicate a query-pattern bug worth
@@ -43,4 +43,4 @@ groups:
         annotations:
           summary: "Postgres recorded one or more deadlocks in the last 5 minutes."
           description: "Database `social` recorded at least one deadlock in the last 5 minutes. Deadlocks usually self-resolve via Postgres's victim selection, but indicate a query-ordering or locking bug worth tracing."
-          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresDeadlocks.md"
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostgresDeadlocks.md"

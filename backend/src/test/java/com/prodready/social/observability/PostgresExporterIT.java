@@ -43,11 +43,13 @@ class PostgresExporterIT {
   private static final String EXPORTER_IMAGE = "quay.io/prometheuscommunity/postgres-exporter:v0.17.1";
 
   // `user.dir` resolves to `<repo>/backend` when Gradle runs the Test task, so this climbs one
-  // level to reach the queries.yaml that docker-compose mounts at runtime. Keeping a single
-  // source of truth here means a stale or rotten queries.yaml fails the test, not just runtime.
+  // level to reach the queries.yaml that the in-k3s postgres-exporter's kustomization mounts
+  // (the same file, post-22b, kept in its consumer-local home under infra/k8s/base/). Keeping
+  // a single source of truth here means a stale or rotten queries.yaml fails the test, not
+  // just runtime.
   private static final Path QUERIES_YAML =
       Paths.get(System.getProperty("user.dir"))
-          .resolve("../infra/observability/postgres-exporter/queries.yaml")
+          .resolve("../infra/k8s/base/postgres-exporter/queries.yaml")
           .normalize();
 
   private static Network network;

@@ -10,9 +10,15 @@ import { randomSignupInput, signupViaApi } from '../src/helpers/signup.ts'
 // `traceparent` header, Tempo returns one trace with spans from both
 // `service.name=frontend` and `service.name=backend`, and the Loki log
 // line emitted by the backend for the same request carries the same
-// `trace.id`. The spec self-skips when the local observability profile
-// is not running (no Tempo on :3200), matching the slice-3/4 pattern of
-// "fail quietly when the optional stack is down".
+// `trace.id`. The spec self-skips when the obs cluster is not running
+// (no Tempo on :3200), matching the slice-3/4 pattern of "fail quietly
+// when the optional stack is down".
+//
+// Slice 22b retargets this spec at the obs cluster: `:3200` (Tempo)
+// and `:3100` (Loki) reach the obs cluster's tempo/loki Services via
+// the Lima portForwards declared in `infra/lima/obs.yaml`. The host
+// ports match the compose-era values 1:1, so URL constants are
+// unchanged — only this header comment is updated.
 //
 // Why a separate dev server: the shared e2e harness in `src/setup/`
 // runs `vite preview` over a build produced without

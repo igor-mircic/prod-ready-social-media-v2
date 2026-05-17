@@ -45,7 +45,7 @@ primary:
 
   # Promote the loaded library into queryable views on a fresh data
   # directory. Same SQL the slice-12 init script at
-  # infra/observability/postgres/init/01-pg-stat-statements.sql
+  # infra/k8s/base/postgres/init/01-pg-stat-statements.sql
   # contains, inlined here so the chart owns the bootstrap end-to-
   # end. The standalone init file is left in place for slice-12
   # audit traceability; a follow-up cleanup may remove it once

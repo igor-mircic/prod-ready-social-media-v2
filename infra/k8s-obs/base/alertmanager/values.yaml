@@ -2,10 +2,9 @@
 # (add-local-k3s-obs-cluster), updated by slice 22a
 # (migrate-obs-content). Chart pin: 1.36.0 (app v0.32.1).
 #
-# Slice 22a migrated the receiver tree from compose
-# (infra/observability/alertmanager/alertmanager.yml). Slice 22b
-# (retire-compose-observability) retires the compose copy and
-# this becomes the only routing tree in the project.
+# Slice 22a migrated the receiver tree from the compose
+# alertmanager. Slice 22b retired the compose copy; this is
+# the only routing tree in the project.
 #
 # Routing tree (severity-keyed): every firing carries a
 # `severity` label pinned by the migrated rule files. The
