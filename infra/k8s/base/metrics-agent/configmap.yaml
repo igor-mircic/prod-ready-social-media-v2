@@ -1,0 +1,150 @@
+# metrics-agent collector pipeline — slice 21
+# (add-k3s-cluster-metrics). One signal type only: metrics.
+#
+# Pipeline shape:
+#   kubeletstats (https://${NODE_NAME}:10250, auth_type:
+#                 serviceAccount, insecure_skip_verify: true,
+#                 15s scrape — per-node + per-pod + per-container
+#                 + per-volume CPU/memory/network/filesystem)
+#   hostmetrics  (root_path: /hostfs reading host's /proc & /sys
+#                 via the daemonset's hostPath mount, 15s scrape,
+#                 scrapers: cpu/memory/load/disk/filesystem/
+#                 network/paging/processes — NOT process /
+#                 processes_temperature / system; see design.md
+#                 Decision 5 for the rationale)
+#     -> batch
+#     -> otlp -> collector.social.svc.cluster.local:4317 (gRPC,
+#                                                          plaintext,
+#                                                          in-cluster)
+#
+# The gateway collector's metrics pipeline then carries this
+# through the slice-19 mTLS envelope to obs prometheus
+# (slice 18c wired the prometheusremotewrite/in-cluster
+# exporter). The agent has no cert material — single security
+# boundary at the gateway (design.md Decision 2; same posture
+# as the slice-20 log-agent).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metrics-agent-config
+data:
+  config.yaml: |
+    receivers:
+      # Per-node kubelet scrape. The receiver presents the
+      # mounted ServiceAccount token at the kubelet's TLS
+      # handshake (auth_type: serviceAccount). The k3s kubelet
+      # ships a self-signed cert that rotates on every k3s
+      # restart, and the connection is from a pod on node N to
+      # the kubelet of node N (never cross-node), so the auth
+      # check is via SA token and TLS is encryption-in-transit
+      # only — insecure_skip_verify is acceptable here
+      # (design.md Decision 4). The Hetzner overlay stub flags
+      # this for production tightening.
+      kubeletstats:
+        collection_interval: 15s
+        # NODE_NAME is injected into the pod env via the
+        # downward API (`spec.nodeName`) — see daemonset.yaml.
+        # `spec.nodeName` is the documented kubeletstats input
+        # because `status.hostIP` is unreliable on multi-CNI
+        # cluster setups.
+        endpoint: https://${env:NODE_NAME}:10250
+        auth_type: serviceAccount
+        insecure_skip_verify: true
+        # Cluster-wide pod metadata enrichment (k8s_namespace_name,
+        # k8s_pod_name, k8s_container_name labels) so dashboard
+        # PromQL can split by namespace/pod/container without
+        # joining to a separate metric family. The metadata
+        # lookup hits the apiserver — see rbac.yaml's cluster
+        # scope rationale.
+        extra_metadata_labels:
+          - container.id
+          - k8s.volume.type
+        metric_groups:
+          - node
+          - pod
+          - container
+          - volume
+
+      # Per-node host scrape. Reads /proc, /sys, and root
+      # filesystem mounts via the hostPath /hostfs mount
+      # declared in daemonset.yaml. No RBAC needed — the
+      # receiver reads host paths through its own pod's
+      # mounted filesystem, not via the apiserver.
+      hostmetrics:
+        collection_interval: 15s
+        root_path: /hostfs
+        # Scraper allow-list per design.md Decision 5. The
+        # absent three are deliberate:
+        #   process               — cardinality blow-up (one
+        #                            series per running process)
+        #   processes_temperature — /sys/class/thermal/* absent
+        #                            on most Lima VM images
+        #   system                — boot time / uptime are
+        #                            redundant with k8s_cluster
+        #                            metrics; trivial to enable
+        #                            later if needed.
+        scrapers:
+          cpu:
+          memory:
+          load:
+          disk:
+          filesystem:
+          network:
+          paging:
+          processes:
+
+    processors:
+      # Override `host.name` with the actual node name (from the
+      # downward-API NODE_NAME env var). hostmetrics' default
+      # `host.name` resource attribute comes from `os.Hostname()`
+      # which inside a pod resolves to the POD hostname (e.g.
+      # `metrics-agent-xyz12`), not the node hostname operators
+      # expect when grouping by `host_name` on the obs side.
+      # `upsert` writes the value whether or not the receiver
+      # already set one.
+      resource/host:
+        attributes:
+          - key: host.name
+            value: ${env:NODE_NAME}
+            action: upsert
+          - key: k8s.node.name
+            value: ${env:NODE_NAME}
+            action: upsert
+
+      batch: {}
+
+    extensions:
+      # Bind explicitly to 0.0.0.0 — the contrib collector's
+      # health_check extension defaults to `localhost:13133`,
+      # which the kubelet probe cannot reach from outside the
+      # pod's network namespace. Binding all interfaces is safe:
+      # the port is not on any Service, so only the pod-local
+      # kubelet probe ever reaches it (same posture as the
+      # slice-20 log-agent).
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    exporters:
+      # In-cluster plaintext OTLP/gRPC to the gateway collector.
+      # The gateway then wraps the cross-cluster hop in mTLS
+      # (slice 19) — see infra/k8s/base/collector/configmap.yaml.
+      # The agent intentionally has no cert material; a single
+      # security boundary at the gateway is the design
+      # (design.md Decision 2 / slice-20 Decision 2 carry-over).
+      otlp:
+        endpoint: collector.social.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        # Exactly one pipeline — no logs, no traces. Slice 20's
+        # log-agent owns logs; the metrics-cluster-agent
+        # Deployment owns cluster-state metrics (different
+        # signal scope, different workload shape — design.md
+        # Decision 1).
+        metrics:
+          receivers: [kubeletstats, hostmetrics]
+          processors: [resource/host, batch]
+          exporters: [otlp]

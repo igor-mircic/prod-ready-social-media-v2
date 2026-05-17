@@ -1,0 +1,44 @@
+# Slice 21 (add-k3s-cluster-metrics). RBAC for the metrics-agent
+# ServiceAccount declared in serviceaccount.yaml.
+#
+# The kubeletstats receiver dials its node's kubelet at
+# `https://${NODE_NAME}:10250` (env var injected via downward
+# API). It authenticates via the mounted ServiceAccount token
+# (auth_type: serviceAccount), so the apiserver must accept the
+# token's read on `nodes`, `nodes/stats`, `nodes/proxy`, and
+# `nodes/metrics` (the last one is the modern path some
+# kubeletstats builds prefer; kept here for forward-compat).
+#
+# Cluster-scoped (ClusterRole + ClusterRoleBinding) because the
+# kubeletstats receiver resolves pod metadata cluster-wide even
+# though the scrape target is the local node — see design.md
+# Decision 7. Verbs are read-only on the four resource sub-paths;
+# no write/admin/wildcard.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metrics-agent
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/stats
+      - nodes/proxy
+      - nodes/metrics
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metrics-agent
+subjects:
+  - kind: ServiceAccount
+    name: metrics-agent
+    namespace: social

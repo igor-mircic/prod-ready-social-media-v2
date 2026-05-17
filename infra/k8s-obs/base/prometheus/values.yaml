@@ -1,15 +1,31 @@
 # prometheus-community/prometheus chart values for slice 17
-# (add-local-k3s-obs-cluster). Chart pin: 29.6.0 (app v3.11.3).
+# (add-local-k3s-obs-cluster), updated by slice 21
+# (add-k3s-cluster-metrics). Chart pin: 29.6.0 (app v3.11.3).
 #
-# This is bare Prometheus — no Operator, no CRDs. Scrape configs
-# are an explicit empty list for this slice (no app data flowing
-# yet; configs land in slice 21 add-k3s-cluster-metrics). The
-# four bundled subcharts (alertmanager, pushgateway,
-# kube-state-metrics, prometheus-node-exporter) are all disabled:
-# alertmanager is its own top-level chart in this slice's tree;
-# kube-state-metrics / node-exporter are deferred to slice 21
-# along with the scrape targets that would consume them;
-# pushgateway is out of scope for this project's push model.
+# This is bare Prometheus — no Operator, no CRDs. Every default
+# scrape job stays disabled and every bundled subchart stays
+# disabled. The data path is push-based: the app-cluster gateway
+# collector dual-writes metrics via `prometheusremotewrite` (the
+# obs collector's `prometheusremotewrite/in-cluster` exporter
+# was wired in slice 18c and the remote-write receiver on this
+# prometheus was enabled in the same slice — see
+# `web.enable-remote-write-receiver` in `extraFlags:` below).
+#
+# Slice 21 (add-k3s-cluster-metrics) added two OTel producers on
+# the app cluster — a `metrics-agent` DaemonSet (kubeletstats +
+# hostmetrics receivers — per-node CPU/memory/disk/load and per-
+# pod CPU/memory) and a `metrics-cluster-agent` Deployment
+# (k8s_cluster receiver — cluster-state metrics like deployment
+# desired/available, pod phase, container restarts, PVC phase).
+# Both ship plaintext OTLP/gRPC to the app-cluster gateway, which
+# carries them through the slice-19 mTLS envelope to this
+# prometheus' remote-write endpoint. This is the OTel-receiver-
+# side approach (design.md Decision 2): it replaces what
+# `kube-state-metrics` and `prometheus-node-exporter` subcharts
+# would have provided and obviates the default chart-side
+# scrape jobs. Cross-cluster flow stays one-directional
+# (app -> obs) and shares the single security envelope at the
+# gateway.
 
 server:
   persistentVolume:
@@ -19,9 +35,12 @@ server:
     # pin it explicitly so a fresh cluster does not depend on the
     # chart's auto-detection.
     storageClass: local-path
-  # 7 days retention matches the 5Gi PVC envelope at our (currently
-  # zero) cardinality. Revisit alongside the slice 21 scrape configs
-  # once we know the real storage rate.
+  # 7 days retention matches the 5Gi PVC envelope at the current
+  # ingest rate. Slice 21 (add-k3s-cluster-metrics) lands the
+  # first real cluster-metric volume via the gateway's
+  # remote-write — measure-then-tune in a later slice as the
+  # series count settles. The Hetzner overlay stub flags both
+  # PVC size and retention as production-side re-sizing items.
   retention: "7d"
   # Slice 18c: enable the remote-write receiver so the obs collector's
   # `prometheusremotewrite/in-cluster` exporter has a destination at
@@ -55,9 +74,18 @@ alertmanager:
 prometheus-pushgateway:
   enabled: false
 
-# No scrape targets to enumerate yet. kube-state-metrics and
-# node-exporter both light up in slice 21 (add-k3s-cluster-metrics)
-# along with the kubelet / cAdvisor / apiserver scrape configs.
+# Both subcharts stay disabled — slice 21 (add-k3s-cluster-metrics)
+# chose the OTel-receiver-side path. The app-cluster
+# metrics-cluster-agent's `k8s_cluster` receiver covers what
+# `kube-state-metrics` would have emitted (deployment desired /
+# available, pod phase, restart counters, PVC phase), and the
+# metrics-agent's `hostmetrics` receiver covers what
+# `prometheus-node-exporter` would have emitted (node CPU,
+# memory, disk, network, load, paging). Data arrives via the
+# gateway's remote-write fan-out (see header). Re-enabling
+# either subchart would inverts the cross-cluster data flow
+# (this prom pulling from the app cluster) and is not the
+# intended path.
 kube-state-metrics:
   enabled: false
 prometheus-node-exporter:
@@ -74,10 +102,13 @@ prometheus-node-exporter:
 # default job has to be disabled by key, which is what the chart's
 # `{{- if $scrapeValue.enabled }}` template check honors.
 #
-# Slice 21 (add-k3s-cluster-metrics) replaces this with the
-# kubelet / cAdvisor / apiserver / node-exporter / kube-state-metrics
-# entries. Slice 18 (add-k3s-app-collector) may add the in-cluster
-# OTLP collector's prometheus receiver as a scrape target.
+# Every job stays disabled — slice 21 (add-k3s-cluster-metrics)
+# chose the OTel-receiver-side path. Data arrives via the
+# gateway's remote-write (header). Re-enabling any of these
+# jobs would inverts the cross-cluster data flow (this prom
+# pulling from the app cluster's kubelet / apiserver / pod
+# endpoints) and demand a second auth model on top of the
+# slice-19 mTLS envelope — explicitly not the design.
 scrapeConfigs:
   prometheus:
     enabled: false

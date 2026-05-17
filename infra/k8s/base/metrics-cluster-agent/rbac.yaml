@@ -1,0 +1,101 @@
+# Slice 21 (add-k3s-cluster-metrics). RBAC for the
+# metrics-cluster-agent ServiceAccount declared in
+# serviceaccount.yaml.
+#
+# The k8s_cluster receiver watches the apiserver for every
+# resource kind it emits metrics for and resolves cross-kind
+# relationships (Deployment -> ReplicaSet -> Pod) so that
+# emitted metrics carry consistent k8s_deployment_name /
+# k8s_replicaset_name labels. The resource list below is the
+# documented upstream minimum for the receiver (contrib repo's
+# example RBAC for k8s_cluster) and is enumerated long-form
+# here rather than referring to a CRD so the manifest stays
+# grep-friendly (design.md Decision 7).
+#
+# Cluster-scoped (ClusterRole + ClusterRoleBinding) because the
+# receiver doesn't know about namespace narrowing — it watches
+# the apiserver globally for every kind below.
+#
+# Verbs are read-only across the board; no write/admin/wildcard.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metrics-cluster-agent
+rules:
+  # Core apiGroup — apiserver kinds the receiver emits
+  # phase/condition/count metrics for.
+  - apiGroups: [""]
+    resources:
+      - events
+      - namespaces
+      - namespaces/status
+      - nodes
+      - nodes/status
+      - persistentvolumeclaims
+      - persistentvolumes
+      - pods
+      - pods/status
+      - replicationcontrollers
+      - replicationcontrollers/status
+      - resourcequotas
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+  # `apps` apiGroup — the modern home for workload controllers.
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+  # `extensions` apiGroup — kept for forward-compatibility with
+  # clusters that still expose workload controllers under the
+  # legacy group path. k3s currently does not, but the receiver's
+  # upstream RBAC enumerates it.
+  - apiGroups: ["extensions"]
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+  # `batch` apiGroup — Jobs and CronJobs (k8s_cluster emits
+  # k8s_job_* and k8s_cronjob_* families).
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs:
+      - get
+      - list
+      - watch
+  # `autoscaling` apiGroup — HPAs (k8s_cluster emits
+  # k8s_horizontalpodautoscaler_current_replicas etc.).
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: metrics-cluster-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: metrics-cluster-agent
+subjects:
+  - kind: ServiceAccount
+    name: metrics-cluster-agent
+    namespace: social

@@ -137,8 +137,47 @@ datasources:
         jsonData:
           implementation: prometheus
 
-# Empty dashboard provisioning — same rationale as datasources.
-dashboardProviders: {}
+# Dashboard provisioning (slice 21 add-k3s-cluster-metrics).
+# One provider (`default`) pointing at /var/lib/grafana/dashboards/default,
+# which is the mountpoint the chart's `dashboardsConfigMaps:`
+# block mounts the corresponding ConfigMap at. Same shape the
+# chart documents in `ci/with-dashboard-json-values.yaml`.
+#
+# Sidecar discovery stays OFF below — the chosen mechanism keeps
+# every dashboard the obs cluster carries visible in git (the
+# JSON files under ./dashboards/) without the sidecar's
+# label-watch indirection. Slice 21 is the first dashboard
+# wired in; future slices add more JSON files alongside
+# cluster-overview.json and a single `kubectl rollout restart
+# deploy/grafana` picks them up.
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: false
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+# Reference the Kustomize-generated ConfigMap that wraps every
+# JSON file under ./dashboards/ — the kustomization.yaml's
+# `configMapGenerator:` produces `grafana-dashboards-default`
+# with a stable name (`disableNameSuffixHash: true`). Kubelet
+# does NOT auto-restart pods when a mounted ConfigMap's data
+# changes, so dashboard JSON edits are picked up via
+# `kubectl rollout restart deploy/grafana`.
+dashboardsConfigMaps:
+  default: grafana-dashboards-default
+
+# Empty `dashboards:` block — the chart's chart-side
+# `dashboards.<provider>.<name>.json` mechanism reads from the
+# chart's own `.Files`, which doesn't apply when the chart is
+# rendered via `kustomize build --enable-helm`. The
+# `dashboardsConfigMaps:` block above is the path we use.
 dashboards: {}
 
 # Both sidecars OFF. The chart's sidecar containers watch
