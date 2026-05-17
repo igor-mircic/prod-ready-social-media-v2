@@ -250,6 +250,36 @@ collector-rollout:
     kubectl rollout restart deploy/collector -n {{PG_NAMESPACE}}
     kubectl rollout status deploy/collector -n {{PG_NAMESPACE}} --timeout=60s
 
+# === Slice 20 (add-k3s-pod-log-shipping) — node-local log-agent
+# DaemonSet verbs. ===
+#
+# The log-agent DaemonSet lives in the `social` namespace, one
+# pod per node (today: a single-node Lima k3s cluster), and
+# tails JSON-shaped backend stdout from /var/log/pods then
+# forwards OTLP/gRPC plaintext to the gateway collector
+# Service (`collector.social.svc.cluster.local:4317`). The
+# gateway then carries it through the slice-19 mTLS envelope
+# to the obs cluster's Loki. See README "k3s pod log shipping".
+#
+# Two daily verbs only — the DaemonSet ships in the base
+# overlay so `just k8s-apply` already stands it up.
+
+# Label-scoped so this picks up every replica on multi-node
+# clusters; follows.
+#
+# Tail log-agent pod logs (follow).
+log-agent-logs:
+    kubectl logs -n {{PG_NAMESPACE}} -l app.kubernetes.io/name=log-agent --tail=200 -f
+
+# kubelet does NOT auto-restart pods when a mounted ConfigMap's
+# data changes. Blocks on rollout-status (120s — DaemonSet
+# rollout is per-node and slower than a single-pod Deployment).
+#
+# Roll the log-agent DaemonSet to pick up ConfigMap edits.
+log-agent-rollout:
+    kubectl rollout restart daemonset/log-agent -n {{PG_NAMESPACE}}
+    kubectl rollout status daemonset/log-agent -n {{PG_NAMESPACE}} --timeout=120s
+
 # === Slice 17 (add-local-k3s-obs-cluster) — observability cluster
 # verbs. ===
 #

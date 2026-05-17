@@ -160,6 +160,59 @@
 # Hetzner slice lands. `just k8s-apply` targets overlays/local only.
 #
 # slice 18c added logs+metrics dual-write to the app collector — production-side targets are the obs box's private-network IP, terminated with mTLS in slice 19.
+#
+# Slice 20 (add-k3s-pod-log-shipping) — the next slice
+# (add-hetzner-deploy) will plug the log-agent DaemonSet
+# pieces in here:
+#
+#   - Production resource caps on the log-agent container.
+#     The local overlay sizes the agent at the same envelope
+#     as the gateway (`requests: cpu=50m / memory=128Mi`,
+#     `limits: cpu=200m / memory=256Mi`) on the assumption
+#     of a single-node cluster with developer-scale log
+#     volume. On a multi-node Hetzner cluster the per-node
+#     memory limit may need to climb (the filelog buffer +
+#     k8sattributes apiserver cache fits comfortably in
+#     256Mi locally but a node tailing more pods at higher
+#     volume will push that envelope). Tune against observed
+#     steady-state usage on the real box.
+#   - Optional namespace-scope widening on the filelog
+#     `include:` glob. The local overlay restricts to
+#     `social_*` only (design.md Decision 5) on the
+#     assumption of a tight 5Gi local Loki PVC. A future
+#     Hetzner slice may widen the glob to cover `kube-system`
+#     (Traefik, coredns, metrics-server, klipper-lb) and the
+#     obs cluster's own pods — gated on a Loki retention /
+#     PVC sizing review since those namespaces produce
+#     continuous log volume.
+#   - Structured-log volume implications for the obs Loki
+#     PVC sizing. The local PVC is 5Gi (chart default at
+#     slice 17). Backend pod logs at production request
+#     volume + any future namespace-scope widening will
+#     drive sustained ingest the local mirror never exercises
+#     — the Hetzner slice will need to re-size the PVC and
+#     decide on chart retention values (`limits_config.retention_period`)
+#     before any cutover. The local-mirror unbounded growth
+#     posture is intentionally NOT inherited here.
+#   - Tolerations: the slice-20 DaemonSet declares
+#     `tolerations: [{operator: Exists}]` which is also the
+#     correct production stance (we want pod logs from every
+#     node, including master nodes carrying the control-plane
+#     taint and any future worker nodes that may carry
+#     workload-specific taints). No Hetzner-overlay change
+#     needed for this aspect — captured here so future
+#     readers don't think the Exists toleration is a
+#     local-mirror shortcut.
+#   - Cursor durability: design.md Open Question #1 deferred
+#     filelog `file_storage` extension wiring for slice 20
+#     (pod restarts in local dev are rare enough to accept
+#     re-reading from the start of every open file on
+#     restart). On Hetzner a production restart re-reads
+#     megabytes of pod logs and duplicates them into Loki —
+#     the Hetzner slice will wire `file_storage` against a
+#     hostPath-mounted bookkeeping directory so the read
+#     offsets survive restarts.
+#
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

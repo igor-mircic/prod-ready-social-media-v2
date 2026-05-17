@@ -1,0 +1,36 @@
+# OpenTelemetry Collector DaemonSet — slice 20
+# (add-k3s-pod-log-shipping). One pod per node, co-located with
+# the kubelet's `/var/log/pods` directory; tails JSON-shaped
+# stdout from every pod in the `social` namespace and ships it
+# OTLP/gRPC plaintext to the gateway collector
+# (`collector.social.svc.cluster.local:4317`). The gateway is
+# the only thing on the app cluster that knows about the obs
+# cluster; the agent has no cert material.
+#
+# This is the "agent" half of the production-canonical OTel
+# "agent/gateway" pattern — slice 21 (cluster metrics) will
+# reuse the same shape: scrape on the agent, forward to the
+# gateway, cross-cluster mTLS terminates on the gateway only.
+#
+# Image tag is pinned via the `images:` directive below so
+# bumping it is a one-line edit. The DaemonSet references the
+# image by name without an inline tag — same convention as
+# infra/k8s/base/collector/kustomization.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: log-agent
+      app.kubernetes.io/part-of: social
+
+resources:
+  - ./serviceaccount.yaml
+  - ./rbac.yaml
+  - ./configmap.yaml
+  - ./daemonset.yaml
+
+images:
+  - name: otel/opentelemetry-collector-contrib
+    newTag: 0.111.0

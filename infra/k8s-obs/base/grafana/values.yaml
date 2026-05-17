@@ -84,9 +84,30 @@ datasources:
         url: http://prometheus-server.observability.svc.cluster.local
         isDefault: false
         editable: false
-      # Loki renders "no data" until slice 20
-      # (`add-k3s-pod-log-shipping`) lands the DaemonSet + filelog
-      # receiver that ingests pod logs.
+      # Loki carries real pod log data starting slice 20
+      # (`add-k3s-pod-log-shipping`): the in-cluster log-agent
+      # DaemonSet's filelog receiver tails /var/log/pods, the
+      # gateway collector relays records via mTLS, and the obs
+      # collector exports them here via otlphttp/loki.
+      #
+      # `derivedFields` wires the logsToTraces direction
+      # (Loki entry -> Tempo span). The log-agent's JSON branch
+      # promotes the backend's ECS `trace.id` to the underscored
+      # `trace_id` log-record field, which Loki surfaces as a
+      # stream label on every record carrying trace context. The
+      # `matcherType: label` derivation triggers on the LABEL
+      # rather than the line body (the agent moves
+      # `attributes.message` into body, so the JSON envelope's
+      # `"trace.id":"..."` substring is no longer present in the
+      # text — a regex-against-line approach would not match).
+      # `${__value.raw}` resolves to the label value at render
+      # time; `datasourceUid: tempo` is the obs Tempo
+      # declaration above.
+      #
+      # The reverse direction (Tempo span -> Loki) is owned by
+      # the Tempo datasource's `tracesToLogsV2` jsonData block
+      # — out of scope for slice 20 and tracked alongside the
+      # broader span-link UX in a follow-up slice.
       - name: Loki
         uid: loki
         type: loki
@@ -94,6 +115,13 @@ datasources:
         url: http://loki.observability.svc.cluster.local:3100
         isDefault: false
         editable: false
+        jsonData:
+          derivedFields:
+            - name: trace_id
+              matcherType: label
+              matcherRegex: trace_id
+              url: '${__value.raw}'
+              datasourceUid: tempo
       # Alertmanager's UI is consumable now (the chart's
       # alertmanager has been up since slice 17 and renders the
       # default empty state). Alerting rules are owned by a

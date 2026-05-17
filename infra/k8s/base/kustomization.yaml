@@ -23,3 +23,4 @@ resources:
 - ./backend
 - ./frontend
 - ./collector
+- ./log-agent
