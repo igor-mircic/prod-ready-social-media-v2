@@ -1,0 +1,18 @@
+# webhook-sink Service — ClusterIP on :8080 (slice 22a,
+# migrate-obs-content). The alertmanager pod dials
+# `http://webhook-sink.observability.svc.cluster.local:8080/{page,ticket}`
+# from the migrated receivers. No NodePort or LoadBalancer is
+# required: the only consumer lives in the same namespace.
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-sink
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webhook-sink
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

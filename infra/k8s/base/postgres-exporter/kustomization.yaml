@@ -1,0 +1,44 @@
+# postgres-exporter workload (slice 22a, migrate-obs-content).
+# Plain-resource Kustomize component — Deployment + Service +
+# ServiceAccount and a ConfigMap generated from the compose-
+# side custom-queries file.
+#
+# The `configMapGenerator:` sources
+# `../../../observability/postgres-exporter/queries.yaml` —
+# the compose-side canonical projection of `pg_stat_statements`
+# columns into Prometheus series (slice 12 source of truth).
+# The cross-tree reference is intentional during the parity
+# window: both exporters (compose + k8s) read the same file,
+# emit byte-identical custom series. Slice 22b retires the
+# compose copy and relocates this YAML under
+# `infra/k8s/base/postgres-exporter/`; the configMapGenerator
+# path swaps at the same time.
+#
+# `disableNameSuffixHash: false` (the chart default) is kept —
+# kustomize appends a content-hash suffix to the ConfigMap name
+# and rewrites the Deployment's `volumes.configMap.name` to
+# match in the same render. Edits to queries.yaml therefore
+# roll the pod automatically (new hash → new ConfigMap name →
+# new generation on the Deployment).
+#
+# Common label applied across every resource — `kubectl delete
+# -l app.kubernetes.io/name=postgres-exporter -n social` cleans
+# the workload, same shape as the slice-15 backend/frontend
+# delete recipes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: postgres-exporter
+
+resources:
+  - ./serviceaccount.yaml
+  - ./deployment.yaml
+  - ./service.yaml
+
+configMapGenerator:
+  - name: postgres-exporter-queries
+    files:
+      - queries.yaml=../../../observability/postgres-exporter/queries.yaml

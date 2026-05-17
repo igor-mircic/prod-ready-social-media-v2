@@ -275,6 +275,49 @@
 #     `server.retention` before any cutover. The local-mirror
 #     posture is intentionally NOT inherited here.
 #
+# Slice 22a (migrate-obs-content) — the next slice
+# (add-hetzner-deploy) will plug the postgres-exporter
+# pieces in here:
+#
+#   - Per-cluster placement. The local overlay runs a single
+#     postgres-exporter Deployment in the `social` namespace
+#     alongside the postgres StatefulSet. Hetzner may run
+#     multiple app clusters (one per region / tenant) and the
+#     correct shape is one exporter per postgres, NOT a single
+#     centralised exporter that scrapes across clusters
+#     (cross-cluster postgres dial inverts the agent/gateway
+#     posture every other slice takes). Replication is per
+#     `kustomize build` of the per-cluster overlay; no chart
+#     change.
+#   - `pg_monitor`-granted DB role. The local exporter loads
+#     the `social`/`social` credentials from the shared
+#     `postgres-credentials` Secret — same Secret the backend
+#     uses. Acceptable for local dev (the backend is the only
+#     other holder), unacceptable for prod where a compromise
+#     of the exporter Deployment leaks application-database
+#     credentials. The Hetzner slice will provision a separate
+#     PostgreSQL role granted just `pg_monitor` (built-in
+#     read-only stats access since PG10), with its own Secret
+#     scoped exclusively to this Deployment.
+#   - Resource cap re-sizing. Local sizes the exporter at
+#     `requests: cpu=25m / memory=64Mi`, `limits: cpu=200m /
+#     memory=128Mi` — sized for one in-cluster postgres serving
+#     a single developer. Production with hundreds of active
+#     connections + `pg_stat_statements` rows for every
+#     normalised query pushes the memory envelope harder; tune
+#     against observed steady-state usage on the real box.
+#   - Anti-affinity / topology constraints. The local overlay's
+#     single-replica posture is fine on a single-node cluster.
+#     A multi-node Hetzner cluster keeps the exporter at
+#     replicas=1 (the metric source is a single primary; two
+#     exporters would scrape the same data and produce
+#     duplicate series under different `instance` labels). No
+#     change needed for HA — capture explicit replicas=1 in
+#     the overlay if any future slice considers bumping it.
+#   - The slice-22a app-collector `prometheus/postgres-exporter`
+#     receiver carries forward unchanged (the scrape target
+#     resolves under each per-cluster Service DNS).
+#
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

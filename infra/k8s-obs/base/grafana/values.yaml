@@ -137,19 +137,23 @@ datasources:
         jsonData:
           implementation: prometheus
 
-# Dashboard provisioning (slice 21 add-k3s-cluster-metrics).
-# One provider (`default`) pointing at /var/lib/grafana/dashboards/default,
-# which is the mountpoint the chart's `dashboardsConfigMaps:`
-# block mounts the corresponding ConfigMap at. Same shape the
-# chart documents in `ci/with-dashboard-json-values.yaml`.
+# Dashboard provisioning (slice 21 add-k3s-cluster-metrics +
+# slice 22a migrate-obs-content). One provider (`default`)
+# pointing at /var/lib/grafana/dashboards/default, which is the
+# mountpoint the chart's `dashboardsConfigMaps:` block mounts
+# the corresponding ConfigMap at. Same shape the chart documents
+# in `ci/with-dashboard-json-values.yaml`.
 #
 # Sidecar discovery stays OFF below — the chosen mechanism keeps
 # every dashboard the obs cluster carries visible in git (the
 # JSON files under ./dashboards/) without the sidecar's
-# label-watch indirection. Slice 21 is the first dashboard
-# wired in; future slices add more JSON files alongside
-# cluster-overview.json and a single `kubectl rollout restart
-# deploy/grafana` picks them up.
+# label-watch indirection. Slice 21 wired the first dashboard
+# (`cluster-overview.json`); slice 22a appended three migrated
+# dashboards (`backend-overview.json`, `frontend-overview.json`,
+# `database-overview.json`) — the sibling kustomization.yaml's
+# `configMapGenerator.files:` list grew from one entry to four
+# and a single `kubectl rollout restart deploy/grafana` picks
+# them up after `just obs-apply`.
 dashboardProviders:
   dashboardproviders.yaml:
     apiVersion: 1

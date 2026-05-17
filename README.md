@@ -459,9 +459,19 @@ property is never broken.
 5. **slice 21** `add-k3s-cluster-metrics` — kubeletstats + hostmetrics
    + k8s_cluster receivers on per-node DaemonSet and singleton
    Deployment agents; cluster-overview dashboard in obs grafana. (done)
-6. **slice 22** `retire-compose-observability` — delete compose
-   prometheus/grafana/tempo/loki/alertmanager/collector; migrate
-   any remaining dashboards/rules; obs lives only in the obs cluster.
+6. **slice 22** — split into 22a + 22b once the actual surface was
+   surveyed (the migration unit and the retirement unit deserve
+   independent revertability; see slice-22a design.md Decision 1).
+   - **slice 22a** `migrate-obs-content` — postgres-exporter in
+     the app cluster; webhook-sink in the obs cluster; five
+     compose rule files (SLO recording/alerting × be/fe + database
+     alerts) copied to the obs prometheus; alertmanager routing
+     tree migrated; backend/frontend/database dashboards migrated.
+     Compose stays running; the parity window opens. (this slice)
+   - **slice 22b** `retire-compose-observability` — drop the
+     `compose-relay*` exporters from the app collector; delete the
+     `observability` compose profile; retarget the five
+     observability e2e specs; rename `infra/observability/`. (next)
 7. **slice 23** `add-hetzner-deploy` — overlays/hetzner for app
    cluster + overlays/hetzner for obs cluster; cert-manager + Let's
    Encrypt; real two-box prod deploy.
@@ -1228,6 +1238,106 @@ Daily verbs:
   22; building the dashboard now would be churn. Side-by-side
   comparability during the slice 21 → 22 window runs as ad-hoc PromQL
   in compose grafana's Explore tab.
+
+### Migrated content
+
+Slice 22a (`migrate-obs-content`) fills the four content-shaped gaps
+the slices 18–21 transport spine left behind. Compose continues to
+run unchanged; the migrated copies land alongside compose's originals
+so an operator can render the same dashboards on `:3000` and `:3001`
+side-by-side and confirm parity before slice 22b
+(`retire-compose-observability`) drops the compose copy.
+
+What's now in the obs cluster after `just obs-apply`:
+
+- **obs prometheus** loads five rule files via the
+  `prometheus-extra-rules` ConfigMap (kustomize-generated from
+  `infra/k8s-obs/base/prometheus/rules/`, mounted at
+  `/etc/prometheus-extra-rules/`):
+  `slo-recording.yml`, `slo-alerting.yml`, `fe-slo-recording.yml`,
+  `fe-slo-alerting.yml`, `database-alerts.yml` — byte-identical
+  copies of `infra/observability/prometheus/rules/`. The companion
+  `*-tests.yml` promtool fixtures stay compose-side (CI is the only
+  consumer). `container-alerts.yml` is NOT migrated — the cadvisor-
+  shaped series it keys on do not exist in slice-21's OTel families;
+  rewriting is a follow-up slice.
+- **obs prometheus → obs alertmanager** is wired via
+  `server.alertmanagers:` in
+  `infra/k8s-obs/base/prometheus/values.yaml`. Firings now land on
+  the migrated routing tree instead of the slice-17 null receiver.
+- **obs alertmanager** declares the severity-keyed routing tree
+  migrated from `infra/observability/alertmanager/alertmanager.yml`:
+  `severity="page"` → `page-webhook`, `severity="ticket"` →
+  `ticket-webhook`, plus a `BackendDown` inhibit rule that suppresses
+  every SLO firing while BackendDown is active. Webhook URLs target
+  the in-cluster `webhook-sink` Service.
+- **`webhook-sink` Deployment + Service** runs in the
+  `observability` namespace. Built from
+  `infra/observability/webhook-sink/` (the same image compose runs)
+  and pushed to the local OCI registry via
+  `just obs-webhook-sink-image`. The `just obs-webhook-sink-received`
+  recipe `kubectl exec`s into the pod and returns every alertmanager
+  payload it has captured as JSON.
+- **`postgres-exporter` Deployment + Service + ServiceAccount**
+  runs in the `social` namespace of the app cluster (not the obs
+  cluster — slice 22a Decision 4 placed it next to the workload it
+  observes). The exporter dials `postgres.social.svc.cluster.local:5432`
+  with credentials from the existing `postgres-credentials` Secret
+  and serves `pg_*` series + the `pg_stat_statements` custom-queries
+  projection on `:9187`.
+- **App collector `prometheus` receiver** named
+  `prometheus/postgres-exporter` scrapes the exporter every 15s
+  and emits OTLP internally so the `pg_*` series flow through the
+  same dual-write fan-out as every other family. Both compose prom
+  and obs prom see identical `pg_*` series during the parity
+  window.
+- **Three migrated grafana dashboards** —
+  `backend-overview.json`, `frontend-overview.json`,
+  `database-overview.json` — join slice-21's `cluster-overview.json`
+  in `infra/k8s-obs/base/grafana/dashboards/`, provisioned via the
+  sibling `configMapGenerator.files:` list. Datasource UIDs already
+  matched (`prometheus` on both grafanas since slice 18b) and the
+  compose dashboards carried no `host.docker.internal` selectors, so
+  the JSON files are byte-identical copies. The
+  `infrastructure-overview` dashboard is NOT migrated — slice 21's
+  `cluster-overview.json` covers the same operator role under
+  k8s-shaped families.
+
+**Parity window with compose:**
+
+- Compose grafana on `:3000` and obs grafana on `:3001` render the
+  same backend / frontend / database dashboards.
+- Compose alertmanager (`:9093`) and obs alertmanager (the in-cluster
+  ClusterIP, reachable via `kubectl port-forward`) fire the same
+  alerts and route via the same severity-keyed tree.
+- Compose `pg_*` series and obs `pg_*` series come from the same
+  collector scrape (single app-cluster receiver, dual-write fan-out)
+  and report identical values.
+- The five obs-side rule files are byte-identical copies of the
+  compose-side originals; CI's `prometheus-rules` job runs
+  `diff -q` for each pair and fails on any drift. The diff step
+  retires in slice 22b alongside the compose rule files.
+
+Daily verbs (slice 22a):
+
+- `just obs-webhook-sink-image` — build the webhook-sink image and
+  push to the local OCI registry.
+- `just obs-webhook-sink-received` — return every alertmanager
+  payload the in-cluster webhook-sink has captured as JSON (mirrors
+  compose's `:8081/received` operator step).
+- `just obs-webhook-sink-logs` — tail the webhook-sink pod logs.
+
+After pulling slice 22a:
+
+```sh
+just obs-webhook-sink-image   # opt-in: build webhook-sink:dev
+just k8s-apply                # rolls out postgres-exporter
+just obs-apply                # rolls out webhook-sink, rule mount, alertmanager tree, dashboards
+kubectl --context social-obs -n observability rollout restart \
+  sts/prometheus-server                       # picks up the new rule mount
+kubectl --context social-obs -n observability rollout restart \
+  deploy/grafana                              # picks up the new dashboard JSON
+```
 
 ### Frontend tracing
 

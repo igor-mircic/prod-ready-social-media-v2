@@ -119,6 +119,49 @@
 # (or merge the two via a context-aware variable).
 #
 # slice 18c added logs and metrics pipelines targeting in-cluster loki and prometheus — production-side adds mTLS termination on the OTLP receiver in slice 19; storage / retention tuning lands in the Hetzner deploy slice.
+# Slice 22a (migrate-obs-content) — the next slice
+# (add-hetzner-deploy) will plug the obs-side migrated content
+# pieces in here:
+#
+#   - webhook-sink may not be needed in prod. The Deployment
+#     is a local-dev test mock — bounded in-memory ring buffer
+#     of POST bodies, exposed via `/received` for the alerting
+#     parity check. Production wants real alerting receivers
+#     (PagerDuty, Opsgenie, Slack, email, etc.) wired into
+#     alertmanager's `receivers:` block instead. The Hetzner
+#     overlay decision matrix:
+#       (a) Drop webhook-sink entirely; the Hetzner alertmanager
+#           values.yaml replaces the three slice-22a receivers
+#           with the prod receivers list. webhook-sink is local-
+#           only by intent.
+#       (b) Keep webhook-sink as a low-overhead audit trail
+#           alongside the prod receivers (every firing posts to
+#           both the real receiver AND the sink); useful for
+#           operator forensics. Costs ~32Mi pod + ring storage.
+#     Decision deferred to the Hetzner slice; the answer turns
+#     on whether the obs cluster carries a dedicated audit-log
+#     stack by then.
+#   - Retention bump on obs prom alongside the migrated rule
+#     load. Slice 22a adds ~14 alert rules + ~30 recording
+#     rules that each emit one series per evaluation interval
+#     (30s). At 7d retention (slice 17 default) the migrated
+#     rules cost ~5MB on the 5Gi PVC — comfortably in-budget
+#     for local. Hetzner production retention is the Hetzner
+#     slice's call (a longer window costs PVC capacity that the
+#     CPX11/CAX11 obs box may not have); the rule load is small
+#     compared to the cluster-metric volume (slice 21) but is
+#     called out here so the Hetzner author thinks about it
+#     alongside the slice-21 PVC sizing note above.
+#   - Alertmanager routing tree replacement. The slice-22a
+#     `infra/k8s-obs/base/alertmanager/values.yaml` declares
+#     webhook-only receivers (`page-webhook`, `ticket-webhook`).
+#     Hetzner replaces them with the production receivers list
+#     via a strategic-merge patch (`config.receivers:` and
+#     `config.route:`) — same shape, different target URLs +
+#     auth headers. The base values intentionally do NOT carry
+#     any prod-secret material; the patch supplies receiver
+#     credentials from a Hetzner-scoped Secret.
+#
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

@@ -108,6 +108,28 @@ jobs:
             prom/prometheus:v2.55.1 \
             test rules /rules/slo-tests.yml /rules/fe-slo-tests.yml
 
+      # Slice 22a (migrate-obs-content) parity guard: the obs-side
+      # rule files under `infra/k8s-obs/base/prometheus/rules/` are
+      # byte-identical copies of the compose-side originals under
+      # `infra/observability/prometheus/rules/`. The compose copy
+      # remains the canonical source-of-truth during the slice-22a
+      # parity window (the obs prom loads its copy via a
+      # kustomize-generated ConfigMap, the compose prom loads the
+      # original via the volume mount in docker-compose.yml). If a
+      # future PR edits one but not the other, the two prometheuses
+      # silently diverge and the side-by-side parity property the
+      # entire arc was built to enable breaks without notice.
+      # `diff -q` fails the job on the first byte difference. The
+      # step RETIRES when slice 22b (`retire-compose-observability`)
+      # drops the compose-side rule files; both the step and the
+      # `Lint rule files` / `Run rule unit tests` steps above go
+      # at the same time.
+      - name: Assert obs-side rule copies stay byte-identical with compose-side originals
+        run: |
+          for f in slo-recording.yml slo-alerting.yml fe-slo-recording.yml fe-slo-alerting.yml database-alerts.yml; do
+            diff -q "infra/observability/prometheus/rules/$f" "infra/k8s-obs/base/prometheus/rules/$f"
+          done
+
   frontend:
     name: frontend (gen + test + build)
     runs-on: ubuntu-latest

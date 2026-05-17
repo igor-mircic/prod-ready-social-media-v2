@@ -70,8 +70,17 @@ vm-shell:
 # auto-execution of `/docker-entrypoint-initdb.d/*.sql` mounted
 # from `primary.initdb.scripts` is unreliable in this release, so
 # we belt-and-braces it. The SQL is idempotent.
+#
+# `--load-restrictor=LoadRestrictionsNone` (slice 22a) lets the
+# postgres-exporter kustomization's configMapGenerator read
+# `../../../observability/postgres-exporter/queries.yaml` — the
+# compose-side canonical projection of `pg_stat_statements` columns
+# that both exporters share during the slice-22a parity window.
+# Slice 22b moves queries.yaml under `infra/k8s/base/postgres-
+# exporter/` when the compose copy retires, and this flag goes
+# with it (kustomize's default tree-confinement is restored).
 k8s-apply:
-    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
+    kustomize build --enable-helm --load-restrictor=LoadRestrictionsNone {{LOCAL_OVERLAY}} | kubectl apply -f -
     @sleep 5
     kubectl wait --for=condition=Ready pod -l {{PG_LABEL}} -n {{PG_NAMESPACE}} --timeout=180s
     kubectl exec -n {{PG_NAMESPACE}} postgres-postgresql-0 -- bash -c 'PGPASSWORD="$POSTGRES_POSTGRES_PASSWORD" psql -U postgres -d social -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"'
@@ -89,12 +98,12 @@ k8s-apply:
 # when changes are present (by design); the leading `-` tells just
 # to treat that as a successful recipe result.
 k8s-diff:
-    -kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl diff -f -
+    -kustomize build --enable-helm --load-restrictor=LoadRestrictionsNone {{LOCAL_OVERLAY}} | kubectl diff -f -
 
 # Tear down every resource the local overlay renders. Leaves the
 # Lima VM running; pair with `just vm-down` for a full stop.
 k8s-delete:
-    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl delete -f -
+    kustomize build --enable-helm --load-restrictor=LoadRestrictionsNone {{LOCAL_OVERLAY}} | kubectl delete -f -
 
 # Open an interactive psql session against the in-cluster postgres
 # via the Lima-forwarded :5432. Requires the host-side `psql`
@@ -138,7 +147,7 @@ backend-image:
 # Apply the local overlay and block on rollout-status (180s
 # absorbs JVM cold start + Flyway on a busy laptop).
 backend-apply:
-    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
+    kustomize build --enable-helm --load-restrictor=LoadRestrictionsNone {{LOCAL_OVERLAY}} | kubectl apply -f -
     kubectl rollout status deploy/backend -n {{PG_NAMESPACE}} --timeout=180s
 
 # Tail backend pod logs (follow).
@@ -194,7 +203,7 @@ frontend-image:
 #
 # Apply the local overlay and block until frontend is Ready.
 frontend-apply:
-    kustomize build --enable-helm {{LOCAL_OVERLAY}} | kubectl apply -f -
+    kustomize build --enable-helm --load-restrictor=LoadRestrictionsNone {{LOCAL_OVERLAY}} | kubectl apply -f -
     kubectl rollout status deploy/frontend -n {{PG_NAMESPACE}} --timeout=120s
 
 # Tail frontend pod logs (follow).
@@ -517,3 +526,37 @@ obs-collector-logs:
 obs-collector-rollout:
     kubectl --context {{OBS_CONTEXT}} rollout restart deploy/collector -n {{OBS_NAMESPACE}}
     kubectl --context {{OBS_CONTEXT}} rollout status deploy/collector -n {{OBS_NAMESPACE}} --timeout=60s
+
+# === Slice 22a (migrate-obs-content) — webhook-sink image +
+# parity-check verbs. ===
+#
+# The webhook-sink Deployment runs in the obs cluster's
+# `observability` namespace; alertmanager dials it at
+# `http://webhook-sink.observability.svc.cluster.local:8080/{page,ticket}`
+# from the migrated routing tree. Image lifecycle mirrors
+# slice-15 backend / slice-16 frontend: build with docker,
+# push to the local OCI registry under the `127.0.0.1:5000/...`
+# host alias, cluster pulls the same image via the
+# `registry.local:5000/...` containerd alias.
+
+# Build the webhook-sink image and push it to the local OCI
+# registry. `obs-apply` does NOT depend on this — the image
+# build is opt-in (build once, re-apply many).
+obs-webhook-sink-image:
+    docker compose --profile registry up -d registry
+    docker build -t 127.0.0.1:5000/webhook-sink:dev infra/observability/webhook-sink
+    docker push 127.0.0.1:5000/webhook-sink:dev
+    @echo "Image pushed: 127.0.0.1:5000/webhook-sink:dev (cluster reference: registry.local:5000/webhook-sink:dev)"
+
+# Surface every alertmanager payload the in-cluster webhook-sink
+# has received as JSON. Runs `wget -qO- localhost:8080/received`
+# inside the pod (no port-forward needed) and pipes through `jq`
+# host-side if available (else raw JSON). Mirrors the compose-
+# side `webhook-received` operator step (the slice-22a parity
+# check uses this exact recipe).
+obs-webhook-sink-received:
+    @kubectl --context {{OBS_CONTEXT}} -n {{OBS_NAMESPACE}} exec deploy/webhook-sink -- wget -qO- localhost:8080/received | { command -v jq >/dev/null 2>&1 && jq . || cat; }
+
+# Tail webhook-sink pod logs (follow).
+obs-webhook-sink-logs:
+    kubectl --context {{OBS_CONTEXT}} logs -n {{OBS_NAMESPACE}} deploy/webhook-sink -f

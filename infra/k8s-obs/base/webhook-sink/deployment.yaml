@@ -1,0 +1,73 @@
+# webhook-sink Deployment (slice 22a, migrate-obs-content).
+# Single replica in the `observability` namespace (inherited
+# from `infra/k8s-obs/base/kustomization.yaml`'s `namespace:`).
+#
+# Image: `registry.local:5000/webhook-sink:dev`. Built from
+# `infra/observability/webhook-sink/` and pushed by the
+# `just obs-webhook-sink-image` recipe (sibling to slice-15
+# `backend-image` / slice-16 `frontend-image`). The hostname is
+# the k3s containerd-side alias; the local OCI registry binds
+# host-side on `127.0.0.1:5000` and the cluster reaches it via
+# the `registries.yaml` mirror rewrite to
+# `http://host.lima.internal:5000`.
+#
+# The sink is a tiny express.js HTTP service (see
+# `infra/observability/webhook-sink/server.js`) — three POST
+# endpoints (`/page`, `/ticket`, and `/healthz`) plus a
+# `GET /received` endpoint that returns a bounded ring buffer
+# of every payload alertmanager has POSTed. Used by:
+#   - the migrated alertmanager routing tree (`infra/k8s-obs/
+#     base/alertmanager/values.yaml`) — webhook URLs target
+#     `http://webhook-sink.observability.svc.cluster.local:8080/{page,ticket}`.
+#   - the `just obs-webhook-sink-received` recipe — exec'es into
+#     this pod and curl's `/received` so a parity check is one
+#     command away.
+#
+# `imagePullPolicy: Always` mirrors the slice-15/16 backend +
+# frontend overlay posture — a floating `:dev` tag means the
+# cluster MUST re-pull on every rollout, otherwise stale layers
+# survive a rebuild. Hetzner overlay swaps to digest-pinned
+# refs + IfNotPresent (called out in the obs hetzner stub).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-sink
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webhook-sink
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webhook-sink
+    spec:
+      containers:
+        - name: webhook-sink
+          image: registry.local:5000/webhook-sink:dev
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            failureThreshold: 3

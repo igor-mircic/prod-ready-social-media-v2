@@ -73,6 +73,32 @@ data:
           http:
             endpoint: 0.0.0.0:4318
 
+      # Slice 22a (migrate-obs-content): scrape the in-cluster
+      # postgres-exporter (`infra/k8s/base/postgres-exporter/`)
+      # in Prometheus-format and emit OTLP internally so its
+      # `pg_*` series flow through the same `batch` processor
+      # and the same dual-write fan-out as every other metric
+      # family. Joining the scrape here (rather than as a
+      # native scrape job on either prometheus instance) keeps
+      # both compose prom and obs prom seeing the same series
+      # under the same labels during the parity window.
+      #
+      # Single target, single job — the contrib distribution
+      # (image `otel/opentelemetry-collector-contrib:0.111.0`)
+      # ships the `prometheus` receiver. Retires when slice 22b
+      # drops the compose `postgres-exporter` and the dual-write
+      # collapses to obs-only; at that point this receiver can
+      # stay (it is the only path to `pg_*` for the obs prom).
+      prometheus/postgres-exporter:
+        config:
+          scrape_configs:
+            - job_name: postgres-exporter
+              scrape_interval: 15s
+              metrics_path: /metrics
+              static_configs:
+                - targets:
+                    - postgres-exporter.social.svc.cluster.local:9187
+
     processors:
       batch: {}
 
@@ -231,7 +257,10 @@ data:
           processors: [batch, transform/redact-path-ids, filter/exclude_observability_self]
           exporters: [otlphttp/compose-relay-logs, otlphttp/obs-cluster-logs]
         metrics:
-          receivers: [otlp]
+          # Slice 22a (migrate-obs-content) added `prometheus/postgres-exporter`
+          # alongside `otlp` here — same fan-out, same processors. The
+          # receiver list is alphabetised for stable diffs.
+          receivers: [otlp, prometheus/postgres-exporter]
           # No path redaction on metrics: FE web-vitals attributes are
           # web-vitals shaped (`route`, `metric.name`), and the
           # source-side route-template labelling in

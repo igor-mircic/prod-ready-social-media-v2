@@ -32,3 +32,4 @@ resources:
 - ./grafana
 - ./alertmanager
 - ./collector
+- ./webhook-sink
