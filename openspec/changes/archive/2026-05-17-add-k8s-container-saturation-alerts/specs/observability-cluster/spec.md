@@ -90,8 +90,6 @@ The thresholds and for-windows SHALL be:
 - **THEN** within one evaluation interval, `ContainerRestartingFrequently` appears in the alerts API with `state: firing`
 - **AND** no for-window delay applies (the rule has no `for:` field)
 
-## MODIFIED Requirements
-
 ### Requirement: Hetzner overlay stubs reflect the post-slice trajectory
 
 The two Hetzner overlay stubs at `infra/k8s/overlays/hetzner/kustomization.yaml` and `infra/k8s-obs/overlays/hetzner/kustomization.yaml` SHALL NOT carry any commented bullet describing "container-saturation alerting gap" or naming `add-k8s-container-saturation-alerts` as a follow-up slice. The bullets named this slice as the prerequisite for prod alerting parity; once this slice lands, the bullets are stale and SHALL be removed.
