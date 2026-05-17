@@ -77,7 +77,7 @@
 
 ## 11. Commit the implementation
 
-- [ ] 11.1 Stage all new and modified files
-- [ ] 11.2 Create a commit titled `Implement migrate-obs-content (slice 22a)` following the repo's existing slice-implementation commit shape
+- [x] 11.1 Stage all new and modified files
+- [x] 11.2 Create a commit titled `Implement migrate-obs-content (slice 22a)` following the repo's existing slice-implementation commit shape
 - [ ] 11.3 Push and open the PR with the standard repo PR template
 - [ ] 11.4 After CI passes, archive the change with `openspec archive migrate-obs-content` (per the `feedback_openspec_apply_autonomous_to_merge` memory: drive commit → push → PR → watch CI → archive → re-watch CI without prompting; ask only at merge time)
