@@ -64,6 +64,21 @@ data:
           - pod
           - container
           - volume
+        # Opt-in metrics required by container-saturation alert rules
+        # (`infra/k8s-obs/base/prometheus/rules/container-alerts.yml`).
+        # The kubeletstats receiver disables these by default; the
+        # add-k8s-container-saturation-alerts slice authored rules
+        # against them assuming they were emitted, and live verification
+        # caught that they were not. After enabling, prometheusremotewrite
+        # translates the dotted names to underscored with an OpenMetrics
+        # `_ratio` unit suffix, producing
+        # `k8s_container_cpu_limit_utilization_ratio` and
+        # `k8s_container_memory_limit_utilization_ratio`.
+        metrics:
+          k8s.container.cpu_limit_utilization:
+            enabled: true
+          k8s.container.memory_limit_utilization:
+            enabled: true
 
       # Per-node host scrape. Reads /proc, /sys, and root
       # filesystem mounts via the hostPath /hostfs mount
