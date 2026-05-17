@@ -863,14 +863,17 @@ stale checkout see these changes:
   `localhost:8889/metrics` collector assertion and switch to obs
   prom queries on `:9090`. The poll budget grows by one prom scrape
   interval to absorb the OTLP→remote-write latency.
-- **Container-saturation alerting (`container-alerts.yml`)** is not
-  re-authored in 22b — the three cadvisor-keyed alerts don't map
-  cleanly to the slice-21 OTel families. The follow-up slice
-  `add-k8s-container-saturation-alerts` owns the rewrite. The three
-  runbook stubs (`ContainerCpuThrottling.md`,
-  `ContainerMemoryNearLimit.md`, `ContainerOomKilled.md`) moved with
-  the rest to `infra/runbooks/` so the follow-up only needs to
-  re-link from new rules.
+- **Container-saturation alerting (`container-alerts.yml`)** was
+  re-authored in the follow-up slice `add-k8s-container-saturation-alerts`
+  against the slice-21 OTel families (`k8s_container_*` via
+  `kubeletstats`). Two of the three rules renamed in the process:
+  `ContainerCpuThrottling` → `ContainerCpuLimitNearExhaustion` (OTel
+  doesn't emit CFS-period counters; sustained near-limit utilisation
+  is the proxy signal) and `ContainerOomKilled` →
+  `ContainerRestartingFrequently` (OTel surfaces restart count but
+  not termination reason; the runbook delegates "why?" to `kubectl
+  describe pod`). `ContainerMemoryNearLimit` kept its name. Runbook
+  stubs at `infra/runbooks/<RuleName>.md`.
 
 ### Cross-cluster mTLS
 
@@ -1314,17 +1317,18 @@ side-by-side and confirm parity before slice 22b
 
 What's now in the obs cluster after `just obs-apply`:
 
-- **obs prometheus** loads five rule files via the
+- **obs prometheus** loads six rule files via the
   `prometheus-extra-rules` ConfigMap (kustomize-generated from
   `infra/k8s-obs/base/prometheus/rules/`, mounted at
   `/etc/prometheus-extra-rules/`):
   `slo-recording.yml`, `slo-alerting.yml`, `fe-slo-recording.yml`,
-  `fe-slo-alerting.yml`, `database-alerts.yml`. The companion
-  `*-tests.yml` promtool fixtures live at
-  `infra/k8s-obs/base/prometheus/tests/` post-22b (CI is the only
-  consumer). `container-alerts.yml` is NOT migrated — the cadvisor-
-  shaped series it keys on do not exist in slice-21's OTel families;
-  rewriting is a follow-up slice.
+  `fe-slo-alerting.yml`, `database-alerts.yml`, and
+  `container-alerts.yml`. The companion `*-tests.yml` promtool
+  fixtures live at `infra/k8s-obs/base/prometheus/tests/` post-22b
+  (CI is the only consumer). `container-alerts.yml` was authored by
+  `add-k8s-container-saturation-alerts` against the slice-21 OTel
+  families (`k8s_container_*` via `kubeletstats`), replacing the
+  cadvisor-keyed rules that slice 22b deleted.
 - **obs prometheus → obs alertmanager** is wired via
   `server.alertmanagers:` in
   `infra/k8s-obs/base/prometheus/values.yaml`. Firings now land on
@@ -1885,8 +1889,9 @@ under the compose `observability` profile. Slice 22b retired that
 profile; the slice-21 `Cluster overview` dashboard in obs grafana
 (`http://localhost:3001/d/cluster-overview`) covers the same operator
 role under OTel families today, and the follow-up slice
-`add-k8s-container-saturation-alerts` will re-author the three
-container alerts against those families.
+`add-k8s-container-saturation-alerts` re-authored the three container
+alerts against those families (with two renames; see
+`infra/k8s-obs/base/prometheus/rules/container-alerts.yml`).
 
 What's wired:
 
@@ -1905,34 +1910,36 @@ What's wired:
   bytes, container restart count over the last hour, and OOM events
   over the last hour. Every PromQL expression filters with `name!=""`
   to drop cAdvisor's cgroup-hierarchy series.
-- Three container-tier alerts ride the slice-11 severity routing
+- Three container-tier alerts rode the slice-11 severity routing
   without any Alertmanager change:
-  - `ContainerCpuThrottling` (`severity=ticket`) — fires when a
-    container is throttled for >25% of CFS periods sustained over 10 m.
-  - `ContainerMemoryNearLimit` (`severity=ticket`) — fires when a
-    container's working set crosses 90% of its declared `mem_limit`
+  - `ContainerCpuThrottling` (`severity=ticket`) — fired when a
+    container was throttled for >25% of CFS periods sustained over 10 m.
+  - `ContainerMemoryNearLimit` (`severity=ticket`) — fired when a
+    container's working set crossed 90% of its declared `mem_limit`
     sustained for 5 m.
-  - `ContainerOomKilled` (`severity=page`) — fires once per OOM-kill
+  - `ContainerOomKilled` (`severity=page`) — fired once per OOM-kill
     event recorded in the last 15 m.
-  All three carry the same `runbook_url` annotation contract as the
-  slice-11 alerts; stubs live at
-  `infra/runbooks/ContainerCpuThrottling.md`,
-  `infra/runbooks/ContainerMemoryNearLimit.md`, and
-  `infra/runbooks/ContainerOomKilled.md`. Slice 22b deleted
-  `container-alerts.yml` (the cadvisor-shaped rules) without
-  re-authoring it against the slice-21 OTel families — the follow-up
-  slice `add-k8s-container-saturation-alerts` owns the rewrite. The
-  fixture at `infra/k8s-obs/base/prometheus/tests/container-tests.yml`
-  is retained as a historical record.
-- The slice-13 `promtool test rules` invocation exercised each alert
-  against synthetic series in
-  `infra/k8s-obs/base/prometheus/tests/container-tests.yml`
-  (firing case, steady-state non-firing case, and — for
-  `ContainerMemoryNearLimit` — the un-limited-container edge case
-  where `container_spec_memory_limit_bytes` is `0`). Slice 22b removes
-  this file from the CI invocation list (the rules file it referenced
-  is deleted) but keeps the fixture as a historical record for the
-  follow-up rewrite slice.
+  Slice 22b deleted `container-alerts.yml` (the cadvisor-shaped
+  rules) when it retired the compose observability profile. The
+  follow-up slice `add-k8s-container-saturation-alerts` re-authored
+  the three alerts against the slice-21 OTel families and renamed
+  two of them: `ContainerCpuThrottling` →
+  `ContainerCpuLimitNearExhaustion` (the OTel kubeletstats receiver
+  does not emit CFS-throttling counters; sustained near-limit
+  utilisation is the proxy signal); `ContainerOomKilled` →
+  `ContainerRestartingFrequently` (OTel surfaces restart count but
+  not termination reason; the runbook delegates the "why?" diagnosis
+  to `kubectl describe pod`). All three carry `severity=page` and
+  route through the slice-22a `page-webhook` receiver. Runbook stubs
+  live at `infra/runbooks/<RuleName>.md` for each renamed alert.
+- The slice-13 `promtool test rules` invocation exercised each
+  cadvisor-keyed alert against synthetic series in
+  `infra/k8s-obs/base/prometheus/tests/container-tests.yml`. Slice 22b
+  removed the file from the CI invocation list (the rules file it
+  referenced was deleted). The follow-up slice
+  `add-k8s-container-saturation-alerts` rewrote the fixture against
+  the new OTel-family rules and re-added it to the CI `promtool test
+  rules` invocation.
 
 **Resource limits on every existing compose service.** Slice 13
 declared explicit `mem_limit` and `cpus` caps on every service in
@@ -1941,10 +1948,11 @@ observability profile (plus the `cadvisor` container), so the cap
 discipline now lives only on the surviving `registry` service. The
 cAdvisor-keyed saturation alerts that depended on these caps
 (`ContainerCpuThrottling`, `ContainerMemoryNearLimit`,
-`ContainerOomKilled`) are not re-authored against OTel families in
-22b — the follow-up slice `add-k8s-container-saturation-alerts`
-owns the rewrite (cluster-overview.json from slice 21 covers the
-same operator visualisation gap in the meantime).
+`ContainerOomKilled`) were re-authored against the slice-21 OTel
+families by the follow-up slice
+`add-k8s-container-saturation-alerts` (with two renames; see
+`infra/k8s-obs/base/prometheus/rules/container-alerts.yml` for the
+canonical list).
 
 **Explicit non-goals.**
 
