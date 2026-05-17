@@ -13,6 +13,12 @@ import { test, expect } from '../src/fixtures/test.ts'
 // burn-rate rules carry 2m+ `for:` clauses — testing the routing surface
 // directly is deterministic and seconds-fast.
 //
+// Targets the obs cluster (slice 22b retired the compose observability stack).
+// `:9093` reaches obs alertmanager via the Lima portForward declared in
+// `infra/lima/obs.yaml`; `:8081` reaches the in-cluster webhook-sink Service
+// (in-cluster port `:8080`) via the slice-22b remap portForward — see
+// design.md Decision 2 for why the asymmetry lives in transport, not the spec.
+//
 // Self-skips when Alertmanager (`:9093`) or the webhook sink (`:8081`) is
 // unreachable, matching the slice-9 pattern from
 // `observability.metric-exemplars.spec.ts`.
@@ -178,7 +184,7 @@ test.describe('observability — alerting routing and inhibition', () => {
 
     const testTag = `page-${randomUUID()}`
     const runbookUrl =
-      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityFastBurn.md'
+      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilityFastBurn.md'
     const testStart = Date.now()
     await postAlerts([
       syntheticAlert({
@@ -204,7 +210,7 @@ test.describe('observability — alerting routing and inhibition', () => {
 
     const testTag = `ticket-${randomUUID()}`
     const runbookUrl =
-      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityBudgetBurn.md'
+      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilityBudgetBurn.md'
     const testStart = Date.now()
     await postAlerts([
       syntheticAlert({
@@ -234,9 +240,9 @@ test.describe('observability — alerting routing and inhibition', () => {
 
     const testTag = `inhibit-${randomUUID()}`
     const backendDownRunbook =
-      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/BackendDown.md'
+      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/BackendDown.md'
     const apiRunbook =
-      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/ApiAvailabilityFastBurn.md'
+      'https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ApiAvailabilityFastBurn.md'
     const testStart = Date.now()
     await postAlerts([
       syntheticAlert({

@@ -162,6 +162,44 @@
 #     any prod-secret material; the patch supplies receiver
 #     credentials from a Hetzner-scoped Secret.
 #
+# Slice 22b (retire-compose-observability) — the next slice
+# (add-hetzner-deploy) will plug these post-22b follow-ups in here:
+#
+#   - cert-manager replaces the self-signed CA in `infra/certs/`.
+#     Same model the app cluster's Hetzner overlay describes
+#     (see infra/k8s/overlays/hetzner/kustomization.yaml): the
+#     slice-19 trust model carries forward, only the distribution
+#     mechanism changes. On the obs side, cert-manager produces
+#     the receiver's server cert + key + CA cert; the
+#     ClusterIssuer's SAN list swaps `host.lima.internal` for the
+#     obs box's production address.
+#
+#   - Real DNS for the obs-cluster endpoints replaces the slice-22b
+#     Lima portForward host bindings. The five host ports the
+#     local mirror publishes (`:9090` prom, `:3200` tempo, `:3100`
+#     loki, `:9093` alertmanager, `:8081` webhook-sink) are
+#     local-dev only. In prod, grafana / prom / loki / tempo /
+#     alertmanager are reached via Ingress + DNS (the
+#     `add-cluster-ingress` slice owns the Traefik-vs-ingress-nginx
+#     decision); webhook-sink is reconsidered per the slice-22a
+#     decision matrix above (either dropped in favour of real
+#     production receivers, or kept as a low-overhead audit
+#     trail).
+#
+#   - Container-saturation alerting gap (prerequisite for prod
+#     alerting parity). Slice 22b deleted `container-alerts.yml`
+#     without re-authoring it against the slice-21 OTel families;
+#     the follow-up slice `add-k8s-container-saturation-alerts`
+#     owns the rewrite. Until that slice lands, the prod obs
+#     prometheus has no paging signal for container CFS
+#     throttling / memory near limit / OOM-kill events on the
+#     app cluster. The slice-21 `cluster-overview` dashboard
+#     surfaces the same pressure visually; the page escalation
+#     path is the missing piece. Author should NOT proceed with
+#     a prod cutover that paged the team pre-22a until the
+#     follow-up slice lands or an explicit "no container
+#     paging" risk acceptance is in place.
+#
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

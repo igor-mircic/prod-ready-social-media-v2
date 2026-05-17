@@ -32,13 +32,10 @@
 # Source-of-truth sibling for the `transform/redact-path-ids` OTTL
 # block: `infra/k8s/base/collector/configmap.yaml` (the app cluster
 # collector). The OTTL statements MUST stay byte-identical across
-# ALL THREE collectors (compose at
-# `infra/observability/collector/collector-config.yaml`, app
-# cluster at `infra/k8s/base/collector/configmap.yaml`, and this
-# obs cluster copy) until slice 22 (`retire-compose-observability`)
-# collapses the compose path. Slice 18c also added
-# `attributes["url.path"]` to every site (the attribute the modern
-# OTel Java agent actually emits). If you edit one set of statements
+# both collectors (slice 22b deleted the third, compose-side copy).
+# Slice 18c also added `attributes["url.path"]` to every site (the
+# attribute the modern OTel Java agent actually emits). If you edit
+# one set of statements
 # you MUST edit the other two in the same commit, otherwise BE-in-
 # k3s traffic gets asymmetric redaction across destinations.
 #
@@ -97,11 +94,8 @@ data:
 
       # MIRROR of the app cluster collector's redact-path-ids
       # block at `infra/k8s/base/collector/configmap.yaml`. Keep
-      # byte-identical with that sibling AND with the compose
-      # collector at
-      # `infra/observability/collector/collector-config.yaml`
-      # until slice 22 retires the compose path. Patterns, in
-      # order:
+      # byte-identical with that sibling (slice 22b deleted the
+      # third, compose-side copy). Patterns, in order:
       #   1. UUID v4 (lowercase hex with hyphens).
       #   2. opaque hex segments of length 8+, bounded by `/` or
       #      end-of-string. The trailing delimiter is captured

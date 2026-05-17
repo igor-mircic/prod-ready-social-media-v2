@@ -32,11 +32,12 @@ OBS_CONTEXT := "social-obs"
 OBS_NAMESPACE := "observability"
 
 # Slice 19 (add-cross-cluster-mtls) — cert directory variables.
-# The CA cert + openssl.cnf live in the shared `infra/observability`
-# tree (one trust anchor, two clusters consume it); the per-cluster
-# leaf certs live alongside each collector's base kustomization so
-# the Kustomize secretGenerator can read them directly.
-OBS_CERTS_CA_DIR := "infra/observability/certs"
+# The CA cert + openssl.cnf live in `infra/certs/` (one trust anchor,
+# two clusters consume it; relocated from `infra/observability/certs/`
+# in slice 22b); the per-cluster leaf certs live alongside each
+# collector's base kustomization so the Kustomize secretGenerator
+# can read them directly.
+OBS_CERTS_CA_DIR := "infra/certs"
 OBS_CERTS_APP_DIR := "infra/k8s/base/collector/certs"
 OBS_CERTS_OBS_DIR := "infra/k8s-obs/base/collector/certs"
 
@@ -375,7 +376,7 @@ obs-up:
 # rotation is therefore a one-command operation.
 #
 # Layout this recipe produces:
-#   infra/observability/certs/
+#   infra/certs/
 #     ca.crt              public, committed (10-year self-signed CA)
 #     ca.key              private, gitignored
 #     openssl.cnf         committed (subject DNs + extension blocks)
@@ -544,7 +545,7 @@ obs-collector-rollout:
 # build is opt-in (build once, re-apply many).
 obs-webhook-sink-image:
     docker compose --profile registry up -d registry
-    docker build -t 127.0.0.1:5000/webhook-sink:dev infra/observability/webhook-sink
+    docker build -t 127.0.0.1:5000/webhook-sink:dev infra/k8s-obs/base/webhook-sink/src
     docker push 127.0.0.1:5000/webhook-sink:dev
     @echo "Image pushed: 127.0.0.1:5000/webhook-sink:dev (cluster reference: registry.local:5000/webhook-sink:dev)"
 

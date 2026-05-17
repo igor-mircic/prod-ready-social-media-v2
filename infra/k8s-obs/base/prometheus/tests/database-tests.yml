@@ -8,8 +8,8 @@
 # Run from the repo root with:
 #
 #   docker run --rm --entrypoint promtool \
-#     -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
-#     prom/prometheus:v2.55.1 test rules /rules/database-tests.yml
+#     -v "$PWD/infra/k8s-obs/base/prometheus:/prometheus:ro" \
+#     prom/prometheus:v2.55.1 test rules /prometheus/tests/database-tests.yml
 #
 # Series naming notes:
 #   - The `postgres-exporter` v0.17.x build emits `pg_stat_database_*` counters
@@ -26,7 +26,7 @@
 #                                    increments inside 5m; no-fire when it
 #                                    stays flat.
 rule_files:
-  - database-alerts.yml
+  - ../rules/database-alerts.yml
 
 evaluation_interval: 1m
 
@@ -52,7 +52,7 @@ tests:
             exp_annotations:
               summary: "Postgres connection count > 80% of max_connections."
               description: "Active backends on database `social` have exceeded 80% of `max_connections` for at least 5 minutes. The app will start failing to acquire connections soon; investigate before user-visible impact lands."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresConnectionSaturation.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostgresConnectionSaturation.md"
 
   # ---------------------------------------------------------------------------
   # 2. PostgresConnectionSaturation — steady-state at 50/100 backends does NOT
@@ -87,7 +87,7 @@ tests:
             exp_annotations:
               summary: "Postgres recorded one or more deadlocks in the last 5 minutes."
               description: "Database `social` recorded at least one deadlock in the last 5 minutes. Deadlocks usually self-resolve via Postgres's victim selection, but indicate a query-ordering or locking bug worth tracing."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/observability/runbooks/PostgresDeadlocks.md"
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/PostgresDeadlocks.md"
 
   # ---------------------------------------------------------------------------
   # 4. PostgresDeadlocks — counter is flat at zero for the whole window.

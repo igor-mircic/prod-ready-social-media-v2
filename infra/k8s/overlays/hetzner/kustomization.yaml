@@ -156,6 +156,42 @@
 #     single-node cluster; capture the spec when the cluster
 #     grows.
 #
+# Slice 22b (retire-compose-observability) — the next slice
+# (add-hetzner-deploy) will plug these post-22b follow-ups in here:
+#
+#   - cert-manager replaces the self-signed CA in `infra/certs/`.
+#     The slice-19 trust model (shared self-signed CA at
+#     `infra/certs/ca.crt`, manual `just obs-certs` regeneration)
+#     stays the cross-cluster trust anchor in prod; only the cert
+#     distribution mechanism changes (cert-manager + a self-signed
+#     `ClusterIssuer` materialises {client.crt, client.key, ca.crt}
+#     into the same Secret name the slice-19 secretGenerator
+#     produces today, with automated renewal). The CA private key
+#     never lives on a developer's disk in prod. See the slice-18b
+#     mTLS block above for the file-path-identical replacement
+#     contract.
+#
+#   - Real DNS for the obs-cluster endpoints replaces the local
+#     `host.lima.internal:14317/14318` Lima portForward shim. The
+#     app-collector's three `otlp/obs-cluster*` exporter
+#     `endpoint:` fields swap to the obs box's private-network /
+#     Tailscale address; the `tls:` block contents stay
+#     file-path-identical (cert-manager materialises the same
+#     {client.crt, client.key, ca.crt} into the same Secret name).
+#     Local-dev portForwards are NOT inherited.
+#
+#   - Container-saturation alerting gap. Slice 22b deleted
+#     `container-alerts.yml` without re-authoring it against the
+#     slice-21 OTel families (`k8s_pod_*`, `k8s_container_*`); the
+#     follow-up slice `add-k8s-container-saturation-alerts` owns
+#     the rewrite. Until that slice lands, the Hetzner prod
+#     deploy has no paging alert for container CFS throttling,
+#     memory near limit, or OOM-kill events on the app cluster.
+#     The slice-21 `cluster-overview` dashboard in obs grafana
+#     covers the same operator visualisation gap, but the page
+#     escalation path is missing — prerequisite for prod alerting
+#     parity with the pre-22a compose stack.
+#
 # Apply path is intentionally NOT wired into the justfile until the
 # Hetzner slice lands. `just k8s-apply` targets overlays/local only.
 #

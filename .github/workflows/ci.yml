@@ -84,51 +84,50 @@ jobs:
       - uses: actions/checkout@v4
 
       # Slice 8: SLO recording/alerting rules + promtool test fixture.
-      # Running `promtool test rules` against the pinned prom/prometheus
-      # image is the executable spec for the alerting logic — it asserts
-      # that each multi-window multi-burn-rate alert fires under crafted
-      # synthetic series and that steady-state success doesn't fire any
-      # availability alert. The image tag MUST match the version pinned
-      # in `docker-compose.yml`'s `prometheus` service.
+      # Slice 22b: compose observability is retired; the obs-side
+      # rule files under `infra/k8s-obs/base/prometheus/rules/` are
+      # the canonical source-of-truth, and the four promtool test
+      # fixtures live under `infra/k8s-obs/base/prometheus/tests/`.
+      # Running `promtool test rules` against the pinned
+      # prom/prometheus image is the executable spec for the
+      # alerting logic — it asserts that each multi-window
+      # multi-burn-rate alert fires under crafted synthetic series
+      # and that steady-state success doesn't fire any availability
+      # alert. The image tag matches the chart-pinned prometheus
+      # version loaded into the obs cluster.
       - name: Lint rule files (promtool check rules)
         run: |
           docker run --rm \
             --entrypoint promtool \
-            -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+            -v "$PWD/infra/k8s-obs/base/prometheus/rules:/rules:ro" \
             prom/prometheus:v2.55.1 \
             check rules \
               /rules/slo-recording.yml /rules/slo-alerting.yml \
-              /rules/fe-slo-recording.yml /rules/fe-slo-alerting.yml
+              /rules/fe-slo-recording.yml /rules/fe-slo-alerting.yml \
+              /rules/database-alerts.yml
 
+      # The test fixtures sit under `tests/`; each fixture references
+      # its target rule files via `../rules/<file>.yml`. Mount the
+      # parent `prometheus/` directory so both `tests/` and `rules/`
+      # are reachable to promtool inside the container.
+      #
+      # `container-tests.yml` is intentionally OMITTED here: slice 22b
+      # retired the compose `container-alerts.yml` and the follow-up
+      # slice `add-k8s-container-saturation-alerts` owns the OTel-
+      # shaped rewrite. The fixture is kept at
+      # `infra/k8s-obs/base/prometheus/tests/container-tests.yml` as
+      # a historical record; it re-enters this list when the rules
+      # file lands.
       - name: Run rule unit tests (promtool test rules)
         run: |
           docker run --rm \
             --entrypoint promtool \
-            -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+            -v "$PWD/infra/k8s-obs/base/prometheus:/prometheus:ro" \
             prom/prometheus:v2.55.1 \
-            test rules /rules/slo-tests.yml /rules/fe-slo-tests.yml
-
-      # Slice 22a (migrate-obs-content) parity guard: the obs-side
-      # rule files under `infra/k8s-obs/base/prometheus/rules/` are
-      # byte-identical copies of the compose-side originals under
-      # `infra/observability/prometheus/rules/`. The compose copy
-      # remains the canonical source-of-truth during the slice-22a
-      # parity window (the obs prom loads its copy via a
-      # kustomize-generated ConfigMap, the compose prom loads the
-      # original via the volume mount in docker-compose.yml). If a
-      # future PR edits one but not the other, the two prometheuses
-      # silently diverge and the side-by-side parity property the
-      # entire arc was built to enable breaks without notice.
-      # `diff -q` fails the job on the first byte difference. The
-      # step RETIRES when slice 22b (`retire-compose-observability`)
-      # drops the compose-side rule files; both the step and the
-      # `Lint rule files` / `Run rule unit tests` steps above go
-      # at the same time.
-      - name: Assert obs-side rule copies stay byte-identical with compose-side originals
-        run: |
-          for f in slo-recording.yml slo-alerting.yml fe-slo-recording.yml fe-slo-alerting.yml database-alerts.yml; do
-            diff -q "infra/observability/prometheus/rules/$f" "infra/k8s-obs/base/prometheus/rules/$f"
-          done
+            test rules \
+              /prometheus/tests/slo-tests.yml \
+              /prometheus/tests/fe-slo-tests.yml \
+              /prometheus/tests/database-tests.yml
 
   frontend:
     name: frontend (gen + test + build)

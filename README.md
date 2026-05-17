@@ -197,13 +197,13 @@ does NOT auto-restart pods when a mounted ConfigMap changes. There is no
 `collector-image` recipe (the contrib image is a public Docker Hub pin)
 and no `collector-forward` (only in-cluster pods dial the OTLP receivers).
 
-**Redaction lives in two places during the transition.** The
+**Redaction lives in two collectors.** The
 `transform/redact-path-ids` OTTL block in `infra/k8s/base/collector/configmap.yaml`
-is duplicated verbatim from `infra/observability/collector/collector-config.yaml`
-(the compose collector's config). Both files carry a header comment
-naming the sibling and warning about drift; slice 22 collapses the two
-into one. If you edit one set of OTTL patterns, you MUST edit the other
-in the same commit or BE-in-k3s and BE-on-host get asymmetric redaction.
+is duplicated verbatim from `infra/k8s-obs/base/collector/configmap.yaml`
+(the obs collector's config). Both files carry a header comment
+naming the sibling and warning about drift. If you edit one set of OTTL
+patterns, you MUST edit the other in the same commit or BE-in-k3s
+traffic gets asymmetric redaction across destinations.
 
 The k3s backend Service is `ClusterIP` only — no Ingress, no LoadBalancer.
 The Traefik-vs-ingress-nginx decision deferred in slice 14 stays deferred;
@@ -299,9 +299,11 @@ asymmetry is introduced here.
 - **No Ingress; access is via `kubectl port-forward`.** The Traefik-vs-
   ingress-nginx decision stays deferred and is rolled forward to a dedicated
   `add-cluster-ingress` slice.
-- **The observability stack is NOT yet in k3s.** Prometheus, Grafana, Tempo,
-  Loki, the OTel Collector, Alertmanager, the webhook sink, `postgres-exporter`,
-  and cAdvisor continue to run under `docker-compose --profile observability`.
+- **The observability stack is NOT yet in k3s.** *(Outdated.)* Slice 17
+  moved the LGTM stack into a dedicated obs k3s cluster, and slice 22b
+  retired the compose observability profile entirely. See
+  [Local observability cluster](#local-observability-cluster) and
+  [Local observability](#local-observability) for the current run loop.
 - **No production-grade secrets handling.** The local Secret is committed in
   plaintext-equivalent base64; the real-secrets decision happens in the
   Hetzner slice.
@@ -467,14 +469,16 @@ property is never broken.
      compose rule files (SLO recording/alerting × be/fe + database
      alerts) copied to the obs prometheus; alertmanager routing
      tree migrated; backend/frontend/database dashboards migrated.
-     Compose stays running; the parity window opens. (this slice)
-   - **slice 22b** `retire-compose-observability` — drop the
-     `compose-relay*` exporters from the app collector; delete the
-     `observability` compose profile; retarget the five
-     observability e2e specs; rename `infra/observability/`. (next)
+     Compose stayed running; the parity window opened. (done)
+   - **slice 22b** `retire-compose-observability` — dropped the
+     `compose-relay*` exporters from the app collector; deleted
+     the `observability` compose profile; retargeted the five
+     observability e2e specs; relocated the surviving cross-
+     consumer files under `infra/observability/` to their real
+     consumers and deleted the directory. (done)
 7. **slice 23** `add-hetzner-deploy` — overlays/hetzner for app
    cluster + overlays/hetzner for obs cluster; cert-manager + Let's
-   Encrypt; real two-box prod deploy.
+   Encrypt; real two-box prod deploy. (next)
 
 See
 `openspec/changes/add-local-k3s-obs-cluster/design.md` "Future
@@ -704,68 +708,87 @@ are the source of truth for how the SPA calls those endpoints.
 
 ## Local observability
 
-The backend exposes Prometheus-format metrics at `/actuator/prometheus`; an
-opt-in compose profile brings up a local Prometheus + Grafana to scrape and
-visualise them. As of slice `add-local-k3s-postgres`, `postgres-exporter`'s
-`DATA_SOURCE_URI` has been retargeted from the now-deleted in-compose
-`postgres` service to `host.docker.internal:5432` — the same Lima-forwarded
-port the backend talks to. See [Local k3s cluster](#local-k3s-cluster) for
-the workload that now lives behind that port.
+The backend exposes Prometheus-format metrics at `/actuator/prometheus`,
+the frontend ships an opt-in OpenTelemetry browser SDK, and the obs k3s
+cluster runs a full LGTM stack (Prometheus, Loki, Tempo, Grafana,
+Alertmanager) plus a webhook-sink to receive alertmanager firings. As of
+slice 22b (`retire-compose-observability`) the local observability run
+loop is **obs-cluster-only** — the opt-in compose `observability`
+profile that previously ran a parallel LGTM stack has been deleted, the
+app cluster collector now writes to a single destination (the obs
+cluster) instead of dual-writing, and `infra/observability/` is gone
+(its surviving cross-consumer files relocated next to their real
+consumers; see the "Migration from slice 22a" section below).
 
-**Two parallel observability stacks — transitional state.** As of slice
-`add-local-k3s-obs-cluster`, a second LGTM stack runs inside a dedicated
-Lima VM / k3s cluster — see
-[Local observability cluster](#local-observability-cluster) above. The
-compose stack documented in *this* section is still primary and still
-receives app telemetry on `:4318` (from the browser SDK and from the host
-backend) plus `:4317` (from the in-cluster collector's relay). As of
-slice `bridge-collectors-to-obs-cluster` (18b) the app cluster collector
-ALSO dual-writes traces to the obs cluster collector on
-`host.lima.internal:14317`; slice `add-cross-cluster-mtls` (19) wraps that
-cross-VM leg in mutual TLS against a shared self-signed CA (see
-[Cross-cluster mTLS](#cross-cluster-mtls) below). **Both** compose Grafana
-(`:3000`) and obs Grafana (`:3001`) now show the same backend trace data
-side-by-side. The
-browser still posts spans cross-origin to the compose collector
-exclusively until slice 18c flips that path. **Today** (slices 17, 18a,
-18b), use compose Grafana on `:3000` for the full picture (BE + FE
-traces) and obs Grafana on `:3001` to verify the obs cluster has
-absorbed the BE traces. **Tomorrow** (post-slice-22), the in-cluster
-Grafana on `:3001` will be the only target — at which point this
-section will move to the obs cluster cross-link entirely and the
-compose stack will be retired.
+Bring up the obs cluster:
 
-**BE-in-k3s telemetry path (slice 18a).** When the backend runs inside the
-local k3s cluster (`just backend-apply`), its OTel Java agent no longer
-dials `host.lima.internal:4318` directly. Instead it ships OTLP/HTTP to
-the in-cluster collector Service at `collector.social.svc.cluster.local:4318`;
-the collector then relays the spans to the compose collector via
-`host.lima.internal:4317` (OTLP/gRPC). Compose Grafana still shows in-cluster
-backend traces unchanged — just with one extra in-cluster hop on the way.
-The host backend (`./gradlew bootRun`) is unaffected; it continues to ship
-direct to `localhost:4318`. See
+```sh
+just obs-up        # boots the obs Lima VM + applies the LGTM stack
+just obs-grafana   # kubectl port-forward svc/grafana 3001:80 (separate terminal)
+```
+
+Once the stack is Ready, the host-facing URLs are:
+
+- **Grafana:** `http://localhost:3001` (admin / `obs-local-dev`, local-dev
+  credentials only). Lands on the provisioned dashboards: `Backend
+  overview`, `Frontend overview`, `Database overview`, `Cluster
+  overview`.
+- **Prometheus:** `http://localhost:9090` (HTTP API; Grafana uses the
+  in-cluster `prometheus-server` datasource).
+- **Tempo:** `http://localhost:3200` (HTTP API; Grafana uses the
+  `Tempo` datasource).
+- **Loki:** `http://localhost:3100` (HTTP API; Grafana uses the
+  `Loki` datasource).
+- **Alertmanager:** `http://localhost:9093` (UI + `/api/v2/alerts`).
+- **Webhook sink:** `http://localhost:8081` (host port `:8081` →
+  guest `:8080` Lima portForward; the asymmetry is intentional — see
+  the slice-22b design's Decision 2). `GET /received` returns the
+  ring buffer of routed alert payloads; `GET /healthz` is the e2e
+  readiness probe. `just obs-webhook-sink-received` is the operator
+  shortcut.
+
+The host ports `:3001` reaches obs grafana via the slice-17
+`obs-grafana` port-forward recipe; `:9090`, `:3200`, `:3100`, `:9093`,
+and `:8081` are direct Lima portForwards declared in
+`infra/lima/obs.yaml` (slice 22b added them in lock-step with the
+compose profile deletion). All of the above is local-dev only —
+production would gate dashboards behind OIDC and the webhook-sink would
+not be exposed; the slice-23 Hetzner overlay (when it lands) handles
+that distinction.
+
+**Backend telemetry path.** The OTel Java agent ships OTLP/HTTP from
+the backend (either `./gradlew bootRun` on the host or
+`just backend-apply` in k3s) to the app-cluster collector Service at
+`collector.social.svc.cluster.local:4318`. The app collector then
+forwards traces / logs / metrics to the obs collector at
+`host.lima.internal:14317` (gRPC, mTLS) and `host.lima.internal:14318`
+(HTTP, mTLS). The host backend reaches the in-cluster collector via the
+Lima `:4318` auto-forward; the k3s backend uses the in-cluster Service
+DNS directly. See
 [Run the backend in cluster (optional)](#run-the-backend-in-cluster-optional)
-for the recipe surface and the rollback shortcut.
+for the in-k3s recipe surface.
 
-**Browser OTLP path (slice 18c).** Browser telemetry no longer ships
-cross-origin direct to the compose collector. Three signals (traces, logs,
-metrics) leave the browser as same-origin POSTs to relative paths
-`/v1/traces`, `/v1/logs`, `/v1/metrics`. Two reverse-proxy surfaces resolve
-those relative URLs:
+**Browser OTLP path.** Browser telemetry posts same-origin to relative
+paths `/v1/traces`, `/v1/logs`, `/v1/metrics`. Two reverse-proxy
+surfaces resolve those URLs:
 
-- **In-k3s (production-shape):** the frontend pod's nginx (`frontend/docker/nginx.conf`)
-  carries a `location /v1/` block that `proxy_pass`es to the in-cluster
-  collector Service at `collector.social.svc.cluster.local:4318`. Browser
-  origin and collector origin are the same (`:13000` via
+- **In-k3s (production-shape):** the frontend pod's nginx
+  (`frontend/docker/nginx.conf`) carries a `location /v1/` block that
+  `proxy_pass`es to the in-cluster collector Service at
+  `collector.social.svc.cluster.local:4318`. Browser origin and
+  collector origin are the same (`:13000` via
   `just frontend-forward`), so no CORS preflight is involved.
-- **Dev loop (`pnpm dev` on `:5173`, `pnpm preview` on `:4173`):**
+- **Dev loop (`pnpm dev` / `pnpm preview`):**
   `frontend/vite.config.ts` declares `/v1/{traces,logs,metrics}` proxy
-  entries under both `server.proxy` and `preview.proxy`, targeting
-  `http://localhost:4318` (the compose collector). The browser sees
-  same-origin URLs; the vite dev server forwards them to the compose
-  collector. **Running `pnpm dev` therefore requires
-  `docker compose --profile observability up -d` so the vite proxy has a
-  target** — otherwise the `/v1/*` POSTs return 502 from vite.
+  entries pointing at `http://localhost:4318`. Post-22b this target
+  is no longer published on the host — the compose collector is gone
+  and the in-k3s app collector is ClusterIP-only. Treat browser OTLP
+  from `pnpm dev` as a known gap until a future slice exposes the
+  app collector's OTLP/HTTP receiver to the host (or routes the dev
+  proxy through the FE pod's nginx). The recommended local-dev path
+  for end-to-end FE telemetry today is to run the frontend in k3s
+  via `just frontend-rebuild && just frontend-forward` and use
+  `http://localhost:13000/`.
 
 The OTel browser SDK exporters' fetch transport wraps the configured URL in
 `new URL(url)` before posting, which rejects path-only strings without a
@@ -775,27 +798,79 @@ relative paths; absolute URLs pass through unchanged. Both
 `tracer.ts`/`errors.ts`/`meter.ts`'s `DEFAULT_ENDPOINT` and the Dockerfile's
 `VITE_OTEL_*_ENDPOINT` build args are the relative `/v1/*` paths.
 
-No CORS allowlist exists anywhere in the chain: the compose collector's
-`receivers.otlp.protocols.http.cors` block was deleted in this slice, and
-the obs k3s collector never carried one. From the app k3s collector
-onward, browser-emitted signals fan out symmetrically with backend traces
-— logs and metrics dual-write to both the compose collector
-(`host.lima.internal:4318`) and the obs k3s collector
-(`host.lima.internal:14318`) so compose Grafana and obs Grafana stay
-side-by-side comparable until slice 22 retires the compose path.
+No CORS allowlist exists anywhere in the chain: the app collector's
+`receivers.otlp.protocols.http.cors` block was deleted in slice 18c, and
+the obs collector never carried one. From the app collector onward,
+every signal flows to the obs cluster only (slice 22b dropped the
+compose-relay leg).
 
-```sh
-docker-compose --profile observability up -d
-```
+### Migration from slice 22a
 
-- Grafana: `http://localhost:3000` (anonymous viewer access; lands directly on
-  the provisioned `Backend overview` dashboard).
-- Prometheus: `http://localhost:9090`.
-- Tempo: `http://localhost:3200` (queried via the Grafana `Tempo` datasource,
-  no standalone UI).
+Slice 22b is the cleanup half of the slice-22 split. Operators on a
+stale checkout see these changes:
 
-Anonymous viewer access is for local development only — production would gate
-the dashboard behind OIDC or basic auth.
+- **Directory moves under `infra/`** (every file content unchanged):
+  - `infra/observability/certs/` → `infra/certs/` (the shared self-
+    signed CA, `openssl.cnf`, and the gitignored `ca.key`).
+  - `infra/observability/runbooks/` → `infra/runbooks/` (17 markdown
+    stubs; `runbook_url` annotations on every alerting rule under
+    `infra/k8s-obs/base/prometheus/rules/` are updated to the new
+    path in the same commit).
+  - `infra/observability/postgres-exporter/queries.yaml` →
+    `infra/k8s/base/postgres-exporter/queries.yaml` (read by the
+    kustomization's `configMapGenerator`).
+  - `infra/observability/postgres/init/01-pg-stat-statements.sql` →
+    `infra/k8s/base/postgres/init/01-pg-stat-statements.sql`.
+  - `infra/observability/webhook-sink/` →
+    `infra/k8s-obs/base/webhook-sink/src/` (image build context for
+    the obs-cluster webhook-sink Deployment).
+  - `infra/observability/prometheus/rules/{slo,fe-slo,database,container}-tests.yml`
+    → `infra/k8s-obs/base/prometheus/tests/` (promtool test fixtures;
+    CI runs the three executable ones).
+- **`docker-compose.yml`:** the `observability` profile is gone (seven
+  services: `prometheus`, `alertmanager`, `grafana`, `loki`, `tempo`,
+  `webhook-sink`, `postgres-exporter` — plus `collector` and
+  `cadvisor`). Run `docker compose --profile observability down`
+  before pulling to clean up any lingering containers; `docker compose
+  up` post-pull starts nothing by default. The `registry` profile is
+  unchanged.
+- **Lima portForwards on the obs VM:** five new entries publish
+  obs prom / tempo / loki / alertmanager / webhook-sink on the host
+  (replacing the host ports the compose stack used to bind). To pick
+  them up on an already-running `social-obs` VM:
+  ```sh
+  limactl edit social-obs --set '
+    .portForwards = [
+      .portForwards[0],
+      .portForwards[1],
+      .portForwards[2],
+      {"guestIP": "0.0.0.0", "guestPort": 9090, "hostPort": 9090},
+      {"guestIP": "0.0.0.0", "guestPort": 3200, "hostPort": 3200},
+      {"guestIP": "0.0.0.0", "guestPort": 3100, "hostPort": 3100},
+      {"guestIP": "0.0.0.0", "guestPort": 9093, "hostPort": 9093},
+      {"guestIP": "0.0.0.0", "guestPort": 8080, "hostPort": 8081},
+      .portForwards[3]
+    ]'
+  limactl stop social-obs && limactl start social-obs
+  ```
+  Alternative: `limactl delete social-obs && just obs-up`
+  (destructive — drops the obs cluster's PVCs).
+- **E2E specs:** the five `observability.*.spec.ts` files target the
+  obs cluster post-22b. Three keep the same host port URLs (the new
+  Lima portForwards preserve them); two
+  (`observability.frontend-rum-metrics.spec.ts` and
+  `observability.frontend-errors.spec.ts`) lose the
+  `localhost:8889/metrics` collector assertion and switch to obs
+  prom queries on `:9090`. The poll budget grows by one prom scrape
+  interval to absorb the OTLP→remote-write latency.
+- **Container-saturation alerting (`container-alerts.yml`)** is not
+  re-authored in 22b — the three cadvisor-keyed alerts don't map
+  cleanly to the slice-21 OTel families. The follow-up slice
+  `add-k8s-container-saturation-alerts` owns the rewrite. The three
+  runbook stubs (`ContainerCpuThrottling.md`,
+  `ContainerMemoryNearLimit.md`, `ContainerOomKilled.md`) moved with
+  the rest to `infra/runbooks/` so the follow-up only needs to
+  re-link from new rules.
 
 ### Cross-cluster mTLS
 
@@ -810,7 +885,7 @@ leg of the dual-write keeps shipping plaintext to the in-host compose collector
 benefit).
 
 **Trust anchor.** One self-signed CA lives at
-`infra/observability/certs/ca.crt` (public, committed). Its private key
+`infra/certs/ca.crt` (public, committed). Its private key
 (`ca.key`) is gitignored and regenerated by the recipe. The same CA cert is
 copied into both per-cluster directories so each side can verify the other's
 leaf at handshake time.
@@ -818,7 +893,7 @@ leaf at handshake time.
 **Cert layout.**
 
 ```
-infra/observability/certs/
+infra/certs/
   ca.crt              public, committed (10-year self-signed CA)
   ca.key              private, gitignored
   openssl.cnf         committed (subject DNs + extension blocks)
@@ -853,7 +928,7 @@ fresh clone is a single `just obs-up && just k8s-apply` away.
 
 ```sh
 just obs-certs   # generate or rotate
-openssl verify -CAfile infra/observability/certs/ca.crt \
+openssl verify -CAfile infra/certs/ca.crt \
   infra/k8s-obs/base/collector/certs/server.crt \
   infra/k8s/base/collector/certs/client.crt
 ```
@@ -935,17 +1010,10 @@ The backend attaches the [OpenTelemetry Java agent](https://opentelemetry.io/doc
 to every JVM entry point (`bootRun`, the `bootJar` launcher used by the e2e
 harness, and the integration-test JVM). The agent auto-instruments Spring MVC,
 HikariCP, JDBC, the slice-1 `@Timed` business methods, and any future outbound
-HTTP, emitting one span per call. The same compose profile that brings up
-Prometheus and Grafana now also brings up [Tempo](https://grafana.com/oss/tempo/)
-as the local span store:
-
-```sh
-docker-compose --profile observability up -d
-```
-
-Spans flow from the agent to Tempo at `http://localhost:4318` over OTLP/HTTP
-(no separate OpenTelemetry Collector — the agent ships direct for now;
-slice 4 introduces the collector alongside Loki for log shipping).
+HTTP, emitting one span per call. Tempo lives in the obs k3s cluster
+post-22b as part of the LGTM stack brought up by `just obs-up`; spans
+reach it via the app collector → obs collector forwarding chain.
+Tempo's HTTP API is reachable on the host at `http://localhost:3200`.
 
 Every request log line now carries populated `trace.id` and `span.id` ECS
 fields. The MDC keys the agent populates (Logstash-style `trace_id`,
@@ -977,34 +1045,34 @@ wired by the `### Log shipping` subsection below.
 
 ### Log shipping
 
-The same compose profile that brings up Prometheus, Grafana, and Tempo also
-brings up an [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-and [Loki](https://grafana.com/oss/loki/):
+`just obs-up` brings up Prometheus, Grafana, Tempo, Loki, Alertmanager,
+and the OTel Collector inside the obs cluster. The OTel Java agent on
+the in-k3s backend ships OTLP/HTTP to the in-cluster app collector at
+`collector.social.svc.cluster.local:4318`; the app collector then
+forwards every signal to the obs collector, which writes logs into the
+in-cluster Loki Service. The host backend (`./gradlew bootRun`) was
+previously served by the compose collector on `localhost:4318` — that
+listener is gone post-22b. Until a future slice exposes the app
+collector's OTLP receiver on a host port (or routes host bootRun via
+the in-k3s backend), the host-bootRun telemetry path is a known gap;
+the in-k3s backend (`just backend-apply`) is the canonical local-dev
+telemetry path. Tempo's HTTP API is reachable on the host at
+`http://localhost:3200` via the obs VM's Lima portForward.
+
+Enable the file appender by exporting `LOG_FILE_PATH` before starting
+the backend; the value may be any writable host path:
 
 ```sh
-docker-compose --profile observability up -d
-```
-
-The Collector replaces Tempo as the listener on host ports `4317` and
-`4318`. The OTel agent's `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`
-is unchanged — only the container behind the port differs. Tempo's
-`http://localhost:3200` HTTP API binding stays for direct curl debugging;
-Tempo's OTLP host port bindings are retired in favour of the Collector
-(Tempo is now reachable only as `tempo:4317` inside the docker network).
-
-To enable the file appender the Collector tails, export `LOG_FILE_PATH`
-before starting the backend:
-
-```sh
-export LOG_FILE_PATH=./infra/observability/logs/backend.json
+export LOG_FILE_PATH=/tmp/backend.json
 ./gradlew :backend:bootRun
 ```
 
 With `LOG_FILE_PATH` set, the backend writes the same ECS JSON to that file
-alongside its stdout output. The Collector's `filelog` receiver tails the
-host directory (bind-mounted into the Collector container) and ships each
-line to Loki. Without `LOG_FILE_PATH` set, the file appender does not
-engage and the dev loop is byte-identical to the slice 2 / slice 3 default.
+alongside its stdout output. Slice 20's k3s pod log shipping covers the
+in-cluster log path; for host `bootRun` the file appender is a developer
+inspection tool (`tail -f /tmp/backend.json | jq -c '...'`). Without
+`LOG_FILE_PATH` set, the file appender does not engage and the dev loop
+is byte-identical to the slice 2 / slice 3 default.
 
 In Grafana:
 
@@ -1015,10 +1083,6 @@ In Grafana:
   this span" link opens the matching Loki log lines, scoped by `trace.id`.
 - The slice-3 manual workflow ("copy `trace.id` and paste into Tempo
   search") still works, but is no longer necessary.
-
-The host directory (`./infra/observability/logs/`) is committed (with a
-`.gitkeep` placeholder) so the Collector's bind-mount target exists on a
-fresh clone; the `*.json` content in that directory is gitignored.
 
 ### k3s pod log shipping
 
@@ -1255,9 +1319,9 @@ What's now in the obs cluster after `just obs-apply`:
   `infra/k8s-obs/base/prometheus/rules/`, mounted at
   `/etc/prometheus-extra-rules/`):
   `slo-recording.yml`, `slo-alerting.yml`, `fe-slo-recording.yml`,
-  `fe-slo-alerting.yml`, `database-alerts.yml` — byte-identical
-  copies of `infra/observability/prometheus/rules/`. The companion
-  `*-tests.yml` promtool fixtures stay compose-side (CI is the only
+  `fe-slo-alerting.yml`, `database-alerts.yml`. The companion
+  `*-tests.yml` promtool fixtures live at
+  `infra/k8s-obs/base/prometheus/tests/` post-22b (CI is the only
   consumer). `container-alerts.yml` is NOT migrated — the cadvisor-
   shaped series it keys on do not exist in slice-21's OTel families;
   rewriting is a follow-up slice.
@@ -1266,14 +1330,15 @@ What's now in the obs cluster after `just obs-apply`:
   `infra/k8s-obs/base/prometheus/values.yaml`. Firings now land on
   the migrated routing tree instead of the slice-17 null receiver.
 - **obs alertmanager** declares the severity-keyed routing tree
-  migrated from `infra/observability/alertmanager/alertmanager.yml`:
+  (migrated from the compose alertmanager in slice 22a, then the
+  compose source was deleted in 22b):
   `severity="page"` → `page-webhook`, `severity="ticket"` →
   `ticket-webhook`, plus a `BackendDown` inhibit rule that suppresses
   every SLO firing while BackendDown is active. Webhook URLs target
   the in-cluster `webhook-sink` Service.
 - **`webhook-sink` Deployment + Service** runs in the
   `observability` namespace. Built from
-  `infra/observability/webhook-sink/` (the same image compose runs)
+  `infra/k8s-obs/base/webhook-sink/src/`
   and pushed to the local OCI registry via
   `just obs-webhook-sink-image`. The `just obs-webhook-sink-received`
   recipe `kubectl exec`s into the pod and returns every alertmanager
@@ -1383,10 +1448,9 @@ Click-to-trace, in Grafana → Explore → Tempo:
 3. From the same trace, click the `Logs for this span` data link on
    any backend span — Loki returns the ECS log line that carries the
    same `trace.id`.
-4. Switch Tempo's view to `Service Graph` (provisioned in
-   `infra/observability/grafana/provisioning/datasources/tempo.yaml`
-   via the `serviceMap` block) to see the `frontend → backend` edge
-   after a few requests have flowed through.
+4. Switch Tempo's view to `Service Graph` (provisioned in the obs
+   grafana's Tempo datasource via the `serviceMap` block) to see the
+   `frontend → backend` edge after a few requests have flowed through.
 
 `traceparent` propagation is **scoped to the backend origin** —
 `http://localhost:8080` in dev and any URL whose origin matches
@@ -1441,12 +1505,12 @@ Wire path:
    depth against any future code path that forgets the route-template
    label) and re-emits them as Prometheus text-exposition on
    `http://localhost:8889/metrics`.
-3. Prometheus's `collector` scrape job (added in
-   `infra/observability/prometheus/prometheus.yml`) reads
-   `:8889/metrics` every 15 s into the same Prometheus instance the
-   Backend overview already uses.
-4. Grafana provisions the new dashboard at
-   `http://localhost:3000/d/frontend-overview` (also reachable via
+3. Slice 22b retired the compose collector's host-side
+   `:8889/metrics` exposition. Browser FE metrics now reach obs
+   prometheus via the obs collector's `prometheusremotewrite`
+   exporter (push), not via a prom-scrape pull.
+4. Grafana provisions the dashboard at
+   `http://localhost:3001/d/frontend-overview` (also reachable via
    Grafana search for `Frontend overview`). Four rows: Web Vitals
    (LCP / CLS / INP / FCP / TTFB p75), route-timing percentiles
    keyed by route, long-task rate and mean duration, and a
@@ -1487,11 +1551,12 @@ alerts read the `le="2500"` (LCP) and `le="200"` (INP) buckets,
 which `frontend/src/observability/meter.ts` pins via per-instrument
 `advice.explicitBucketBoundaries`. The Prometheus rule files
 (`fe-slo-recording.yml`, `fe-slo-alerting.yml`,
-`fe-slo-tests.yml`) live alongside the backend ones in
-`infra/observability/prometheus/rules/`. Reminder: Prometheus must
-be restarted (`docker-compose --profile observability restart
-prometheus`) for `rule_files:` changes to take effect — same caveat
-as the slice-8 Alerting subsection below.
+`fe-slo-tests.yml`) live at `infra/k8s-obs/base/prometheus/rules/`
+(rules) and `infra/k8s-obs/base/prometheus/tests/` (the test fixture)
+post-22b. Reminder: the obs prometheus pod must be restarted
+(`kubectl --context social-obs -n observability rollout restart
+sts/prometheus-server`) for `rule_files:` changes to take effect —
+same caveat as the slice-8 Alerting subsection below.
 
 ### Frontend errors
 
@@ -1567,9 +1632,9 @@ token-shaped substrings from `error.message` and
 over `attributes.error.message`, `attributes.error.stack_trace`,
 and `body` — a last-line guard for any third-party library
 exception the SDK regex missed. The patterns live in
-`frontend/src/observability/error-sink.ts` (`PII_REGEXES`) and
-`infra/observability/collector/collector-config.yaml`
-(`transform/pii_scrub`); they must move together.
+`frontend/src/observability/error-sink.ts` (`PII_REGEXES`) and the obs
+collector's ConfigMap (`infra/k8s-obs/base/collector/configmap.yaml`,
+`transform/pii_scrub`); they must move together.
 
 **Source-map symbolication:** explicitly **out of scope** for
 this slice. Built bundles produce munged stack frames; in local
@@ -1582,13 +1647,13 @@ auto-memory and the **Open Follow-ups** section of
 
 ### Alerting
 
-The same observability profile also brings up [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/)
-and loads the slice-8 SLO recording + multi-window multi-burn-rate alerting
-rules into Prometheus:
-
-```sh
-docker-compose --profile observability up -d
-```
+`just obs-up` also brings up [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/)
+inside the obs cluster, and obs prometheus loads the slice-8 SLO
+recording + multi-window multi-burn-rate alerting rules from
+`infra/k8s-obs/base/prometheus/rules/` via a kustomize-generated
+ConfigMap mounted at `/etc/prometheus-extra-rules/`. Alertmanager's
+UI is reachable at `http://localhost:9093` via the obs VM's Lima
+portForward.
 
 Three SLOs are evaluated continuously against the backend's existing metrics:
 
@@ -1612,10 +1677,11 @@ burn-rate alerts can't fire when the target is offline (no samples to divide).
 - Raw HTTP: `curl http://localhost:9093/api/v2/alerts` for scripting.
 
 **Webhook sink (local-dev receiver).** Alertmanager's stub `null` receiver
-is replaced by a real local-dev webhook sink under
-`infra/observability/webhook-sink/` — a small Node + Express container that
-records every routed firing in a bounded in-memory ring. Severity-based
-routing dispatches each alert to one of two endpoints:
+is replaced by a real local-dev webhook sink — a small Node + Express
+container (sources at `infra/k8s-obs/base/webhook-sink/src/`, deployed
+as the obs-cluster `webhook-sink` Deployment) that records every routed
+firing in a bounded in-memory ring. Severity-based routing dispatches
+each alert to one of two endpoints:
 
 - `severity=page` → `POST http://webhook-sink:8080/page` (page-webhook receiver).
 - `severity=ticket` → `POST http://webhook-sink:8080/ticket` (ticket-webhook receiver).
@@ -1638,7 +1704,7 @@ tree stays as-is.
 
 **Runbook annotations.** Every alert in the rule files carries a
 `runbook_url` annotation pointing at a Markdown stub under
-`infra/observability/runbooks/`. The stubs are intentionally minimal —
+`infra/runbooks/`. The stubs are intentionally minimal —
 each has `Symptoms` / `Impact` / `Triage` / `Mitigation` / `Escalation`
 sections seeded with the basics, and real incident learnings are
 expected to fill them in over time. The contract is "every alert has a
@@ -1654,22 +1720,22 @@ the page noise-free.
 
 ```sh
 docker run --rm --entrypoint promtool \
-  -v "$PWD/infra/observability/prometheus/rules:/rules:ro" \
+  -v "$PWD/infra/k8s-obs/base/prometheus:/prometheus:ro" \
   prom/prometheus:v2.55.1 \
-  test rules /rules/slo-tests.yml
+  test rules /prometheus/tests/slo-tests.yml
 ```
 
-The fixture at `infra/observability/prometheus/rules/slo-tests.yml` is the
+The fixture at `infra/k8s-obs/base/prometheus/tests/slo-tests.yml` is the
 executable spec for the alerting rules — each scenario in
 `openspec/changes/add-backend-alerting-slos/specs/observability/spec.md`
 corresponds to a test stanza. The same one-liner runs in CI as a gate.
 
 **Editing rule files** (`slo-recording.yml`, `slo-alerting.yml`) requires a
 Prometheus restart for the changes to take effect; Prometheus reads the rule
-files only at startup under this compose setup:
+files only at startup:
 
 ```sh
-docker-compose --profile observability restart prometheus
+kubectl --context social-obs -n observability rollout restart sts/prometheus-server
 ```
 
 (The Grafana datasource provisioning has the same restart requirement — see
@@ -1677,14 +1743,10 @@ the prior subsection's notes on the slice-4 / slice-5 datasource files.)
 
 ### Exemplars (metric → trace one-click pivot)
 
-The same observability profile lights up Prometheus exemplar storage and a
-Grafana panel-to-Tempo pivot, so a high-latency bucket on the
+`just obs-up` lights up Prometheus exemplar storage and a Grafana
+panel-to-Tempo pivot, so a high-latency bucket on the
 `http_server_requests_seconds_bucket` histogram is one click away from the
-trace that produced it:
-
-```sh
-docker-compose --profile observability up -d
-```
+trace that produced it.
 
 What's wired:
 
@@ -1710,12 +1772,13 @@ few requests against the running backend, wait one scrape interval
 
 **Datasource provisioning restart caveat:** Grafana reads provisioning
 files only at container start. After editing
-`infra/observability/grafana/provisioning/datasources/prometheus.yaml`,
-restart Grafana so the new `jsonData.exemplarTraceIdDestinations` (or
-any other datasource change) takes effect:
+`infra/k8s-obs/base/grafana/provisioning/datasources/prometheus.yaml`,
+restart the obs grafana pod so the new
+`jsonData.exemplarTraceIdDestinations` (or any other datasource change)
+takes effect:
 
 ```sh
-docker-compose --profile observability restart grafana
+kubectl --context social-obs -n observability rollout restart deploy/grafana
 ```
 
 **Frontend exemplars are deferred:** the OTel Collector's `prometheus`
@@ -1731,33 +1794,33 @@ so the local Postgres is observable as an engine, not just as a target of
 backend-side timers (HikariCP, JDBC spans, request latency). Connection
 pressure against `max_connections`, transactions per second, cache hit
 ratio, deadlocks, and the top-N slow queries from `pg_stat_statements`
-are surfaced through Prometheus and Grafana alongside the existing
-backend / frontend dashboards:
-
-```sh
-docker-compose --profile observability up -d
-```
+are surfaced through obs prometheus and grafana alongside the existing
+backend / frontend dashboards (brought up with `just obs-up`).
 
 What's wired:
 
-- The `postgres` service in `docker-compose.yml` runs with
-  `shared_preload_libraries=pg_stat_statements`, and a first-boot init
-  script (`infra/observability/postgres/init/01-pg-stat-statements.sql`)
-  creates the extension on the `social` database — so per-statement
-  counters are real signal, not placeholders.
-- A new `postgres-exporter` service (pinned `quay.io/prometheuscommunity/postgres-exporter`
-  image, port `9187`) authenticates to Postgres via `DATA_SOURCE_URI` and
-  emits the standard `pg_stat_database` / `pg_settings` / `pg_database_size_bytes`
-  series. A custom-queries projection at
-  `infra/observability/postgres-exporter/queries.yaml` adds
+- The in-k3s `postgres` (Bitnami chart) runs with
+  `shared_preload_libraries=pg_stat_statements`, and the init script
+  at `infra/k8s/base/postgres/init/01-pg-stat-statements.sql` (inlined
+  into the chart's `primary.initdb.scripts:`) creates the extension on
+  the `social` database — so per-statement counters are real signal,
+  not placeholders.
+- A `postgres-exporter` Deployment + Service runs in the app cluster's
+  `social` namespace (manifests at `infra/k8s/base/postgres-exporter/`,
+  pinned `quay.io/prometheuscommunity/postgres-exporter` image,
+  port `9187`) and emits the standard `pg_stat_database` /
+  `pg_settings` / `pg_database_size_bytes` series. A custom-queries
+  projection at `infra/k8s/base/postgres-exporter/queries.yaml` adds
   `pg_stat_statements_*` series for the top-100 statements by total
   execution time, with the `query` text truncated to 200 characters to
   keep label cardinality bounded.
-- Prometheus picks up the exporter as a new `postgres-exporter` scrape
-  job (`infra/observability/prometheus/prometheus.yml`); the target's
-  health is on `http://localhost:9090/targets`.
-- Grafana auto-provisions a new `Database overview` dashboard at
-  `http://localhost:3000/d/database-overview` (also reachable via
+- The app collector's `prometheus/postgres-exporter` receiver scrapes
+  the exporter every 15 s and emits OTLP internally; obs prometheus
+  receives the `pg_*` series via the obs collector's
+  `prometheusremotewrite` exporter. Target health is on
+  `http://localhost:9090/targets` once obs prom is reachable.
+- Grafana auto-provisions a `Database overview` dashboard at
+  `http://localhost:3001/d/database-overview` (also reachable via
   Dashboards → Browse → "Database overview"): connection saturation
   gauge, connection-count time series, transactions/sec, cache hit
   ratio, tuples affected, deadlock rate, database size, and a top-N
@@ -1768,31 +1831,33 @@ What's wired:
   (`severity=ticket`, fires on any deadlock counter increment in the
   last 5 m). Both carry the same `runbook_url` annotation contract as
   the slice-11 alerts; stubs live at
-  `infra/observability/runbooks/PostgresConnectionSaturation.md` and
-  `…/PostgresDeadlocks.md`. No Alertmanager config change is needed —
-  the existing severity tree dispatches them to the same webhook sink.
+  `infra/runbooks/PostgresConnectionSaturation.md` and
+  `infra/runbooks/PostgresDeadlocks.md`. No Alertmanager config change
+  is needed — the existing severity tree dispatches them to the same
+  webhook sink.
 - The `promtool test rules` step gains
-  `infra/observability/prometheus/rules/database-tests.yml`, which
+  `infra/k8s-obs/base/prometheus/tests/database-tests.yml`, which
   exercises both alerts against synthetic series and pins the exact
   metric names emitted by the exporter (no `_total` suffix on
   `pg_stat_database_*` counters in v0.17.x).
 
-**One-time volume rebuild for `pg_stat_statements`.** The
+**One-time PVC rebuild for `pg_stat_statements`.** The
 `shared_preload_libraries` flag loads the library at server start, but
 the matching `CREATE EXTENSION` step only fires on a fresh data
 directory — Postgres's `/docker-entrypoint-initdb.d/` scripts run during
-`initdb`, not on every boot. If you already have a `postgres-data`
-volume from before this slice, the library is loaded but the extension
-isn't registered, so the exporter's pg_stat_statements query returns
-`ERROR: relation "pg_stat_statements" does not exist`. Two paths:
+`initdb`, not on every boot. If your in-k3s `postgres` PVC predates the
+extension-registering chart change, the library is loaded but the
+extension isn't registered, so the exporter's pg_stat_statements query
+returns `ERROR: relation "pg_stat_statements" does not exist`. Two
+paths:
 
 ```sh
-# (a) recreate the volume — fastest, loses any local dev data:
-docker compose down -v
-docker compose --profile observability up -d
+# (a) recreate the PVC — fastest, loses any local dev data:
+kubectl --context lima-social -n social delete pvc data-postgres-0
+just k8s-apply
 
-# (b) create the extension against the live volume — keeps local data:
-docker compose exec postgres \
+# (b) create the extension against the live PVC — keeps local data:
+kubectl --context lima-social -n social exec sts/postgres -- \
   psql -U social -d social -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements;'
 ```
 
@@ -1815,12 +1880,13 @@ stack is observable as a resource consumer (USE — Utilization,
 Saturation, Errors), not just as a target of backend-side timers or
 database-internal counters. Per-container CPU usage and CFS throttling,
 memory working set vs. limit, network I/O, restart count, and OOM-kill
-events are surfaced through Prometheus and Grafana alongside the
-existing backend, frontend, and database dashboards:
-
-```sh
-docker-compose --profile observability up -d
-```
+events were originally surfaced through `cadvisor` + Prometheus + Grafana
+under the compose `observability` profile. Slice 22b retired that
+profile; the slice-21 `Cluster overview` dashboard in obs grafana
+(`http://localhost:3001/d/cluster-overview`) covers the same operator
+role under OTel families today, and the follow-up slice
+`add-k8s-container-saturation-alerts` will re-author the three
+container alerts against those families.
 
 What's wired:
 
@@ -1850,28 +1916,35 @@ What's wired:
     event recorded in the last 15 m.
   All three carry the same `runbook_url` annotation contract as the
   slice-11 alerts; stubs live at
-  `infra/observability/runbooks/ContainerCpuThrottling.md`,
-  `…/ContainerMemoryNearLimit.md`, and `…/ContainerOomKilled.md`.
-- The `promtool test rules` step gains
-  `infra/observability/prometheus/rules/container-tests.yml`, exercising
-  each alert against synthetic series (firing case, steady-state
-  non-firing case, and — for `ContainerMemoryNearLimit` — the
-  un-limited-container edge case where `container_spec_memory_limit_bytes`
-  is `0`).
+  `infra/runbooks/ContainerCpuThrottling.md`,
+  `infra/runbooks/ContainerMemoryNearLimit.md`, and
+  `infra/runbooks/ContainerOomKilled.md`. Slice 22b deleted
+  `container-alerts.yml` (the cadvisor-shaped rules) without
+  re-authoring it against the slice-21 OTel families — the follow-up
+  slice `add-k8s-container-saturation-alerts` owns the rewrite. The
+  fixture at `infra/k8s-obs/base/prometheus/tests/container-tests.yml`
+  is retained as a historical record.
+- The slice-13 `promtool test rules` invocation exercised each alert
+  against synthetic series in
+  `infra/k8s-obs/base/prometheus/tests/container-tests.yml`
+  (firing case, steady-state non-firing case, and — for
+  `ContainerMemoryNearLimit` — the un-limited-container edge case
+  where `container_spec_memory_limit_bytes` is `0`). Slice 22b removes
+  this file from the CI invocation list (the rules file it referenced
+  is deleted) but keeps the fixture as a historical record for the
+  follow-up rewrite slice.
 
-**Resource limits on every existing compose service.** Slice 13 also
-declares an explicit `mem_limit` and `cpus` cap on every service in
-`docker-compose.yml` (`postgres`, `prometheus`, `grafana`, `tempo`,
-`loki`, `collector`, `alertmanager`, `webhook-sink`,
-`postgres-exporter`, and `cadvisor` itself). Without these limits the
-cAdvisor saturation alerts cannot fire: `container_spec_memory_limit_bytes`
-is unbounded, CFS throttling never engages, and the OOM killer only
-triggers when the laptop's host memory runs out. Caps are sized
-comfortably above local-dev steady state (total ceiling ~4.4 GiB / ~9
-vCPU) and the inline comment block at the top of `docker-compose.yml`
-records the rationale. `postgres`'s cap applies under the default
-compose invocation too (not just `observability`), which is fine — the
-cap is set well above what local dev needs.
+**Resource limits on every existing compose service.** Slice 13
+declared explicit `mem_limit` and `cpus` caps on every service in
+`docker-compose.yml`. Slice 22b retired the entire compose
+observability profile (plus the `cadvisor` container), so the cap
+discipline now lives only on the surviving `registry` service. The
+cAdvisor-keyed saturation alerts that depended on these caps
+(`ContainerCpuThrottling`, `ContainerMemoryNearLimit`,
+`ContainerOomKilled`) are not re-authored against OTel families in
+22b — the follow-up slice `add-k8s-container-saturation-alerts`
+owns the rewrite (cluster-overview.json from slice 21 covers the
+same operator visualisation gap in the meantime).
 
 **Explicit non-goals.**
 

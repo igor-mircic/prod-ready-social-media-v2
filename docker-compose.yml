@@ -9,15 +9,19 @@
 # prior compose definition cleanly. Until that revert happens, the
 # volume is unmounted.
 #
-# What remains here: the opt-in observability stack (Prometheus +
-# Grafana + Tempo + Collector + Loki + Alertmanager + postgres-
-# exporter + cadvisor). The postgres-exporter service now scrapes
-# the in-k3s postgres via host.docker.internal:5432 (Docker
-# Desktop's host-loopback alias); every other observability
-# component is unchanged.
+# As of retire-compose-observability (slice 22b), the opt-in
+# observability profile is also gone — local observability runs in
+# the obs k3s cluster (see README's "Local observability" section
+# and the `just obs-up` recipe). The seven compose services that
+# used to back the local LGTM stack (prometheus, alertmanager,
+# grafana, loki, tempo, webhook-sink, postgres-exporter) plus the
+# `collector` and `cadvisor` containers have all been deleted; the
+# `infra/observability/` subtree they referenced has been relocated
+# next to its real consumer or deleted with the profile.
 #
-# Opt-in observability stack (default off):
-#   docker-compose --profile observability up -d
+# What remains here: an opt-in local OCI registry that serves as
+# the image store for the in-k3s backend / frontend / webhook-sink
+# images.
 #
 # Opt-in local OCI registry (default off):
 #   docker compose --profile registry up -d registry
@@ -27,228 +31,7 @@
 # postgres user/password/database are the same on either side of
 # the k3s migration. Override on the backend via the usual
 # SPRING_DATASOURCE_* env vars.
-#
-# Slice 13 (container saturation): every service declares an explicit
-# `mem_limit` and `cpus` cap. Without these limits, the cAdvisor saturation
-# alerts in `infra/observability/prometheus/rules/container-alerts.yml`
-# cannot fire — `container_spec_memory_limit_bytes` is unbounded (or 0,
-# depending on Docker version), CFS throttling never engages so
-# `container_cpu_cfs_throttled_periods_total` stays at zero, and the OOM
-# killer only triggers when the host itself runs out of memory. Caps are
-# sized comfortably above local-dev steady state but tight enough that a
-# runaway component trips its own alert before swamping the laptop.
-# Compose-v2 `mem_limit` / `cpus` keys are used (rather than the
-# Swarm-shaped `deploy.resources.limits` block) so the limits take effect
-# under `docker compose up` on every supported engine version.
 services:
-  postgres-exporter:
-    # Slice 12: surfaces Postgres internals to Prometheus — pg_stat_database
-    # transactions/connections, pg_settings_max_connections, and the
-    # custom-queries projection of pg_stat_statements declared in
-    # infra/observability/postgres-exporter/queries.yaml. Only runs under
-    # the `observability` profile; the default compose invocation does NOT
-    # start it. Pinned by tag (not `latest`), matching the convention used
-    # by `prometheus`, `grafana`, `alertmanager`, etc.
-    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
-    container_name: social-postgres-exporter
-    profiles: ["observability"]
-    ports:
-      - "9187:9187"
-    environment:
-      # Slice 14 (add-local-k3s-postgres): postgres now lives in
-      # k3s; the exporter reaches it via Docker Desktop's host-
-      # loopback alias, which forwards through Lima's :5432 port-
-      # forward to the in-cluster postgres-lb LoadBalancer Service.
-      # See infra/k8s/base/postgres/ for the workload definition.
-      DATA_SOURCE_URI: "host.docker.internal:5432/social?sslmode=disable"
-      DATA_SOURCE_USER: "social"
-      DATA_SOURCE_PASS: "social"
-      PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres-exporter/queries.yaml"
-    volumes:
-      - ./infra/observability/postgres-exporter/queries.yaml:/etc/postgres-exporter/queries.yaml:ro
-    # Slice 14: the in-compose `postgres` service is gone, so
-    # `depends_on: postgres` would refer to a non-existent target.
-    # Liveness against the in-k3s postgres is gated by `just k8s-
-    # apply` running before `docker compose --profile observability
-    # up -d`, not by compose ordering.
-    mem_limit: 128m
-    cpus: 0.25
-
-  prometheus:
-    image: prom/prometheus:v2.55.1
-    container_name: social-prometheus
-    profiles: ["observability"]
-    ports:
-      - "9090:9090"
-    # Slice 9: `--enable-feature=exemplar-storage` lights up Prometheus's
-    # in-memory exemplar TSDB so the BE-emitted OpenMetrics exemplars on
-    # `http_server_requests_seconds_bucket` survive ingestion and surface via
-    # `/api/v1/query_exemplars`. Overriding `command:` requires re-stating the
-    # image's defaults the rest of this slice depends on (config file path,
-    # TSDB path) — anything we drop here gets dropped from the running
-    # container too.
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--enable-feature=exemplar-storage"
-    volumes:
-      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # Slice 8: SLO recording + alerting rules + promtool test fixture.
-      # `rule_files:` in prometheus.yml references this mount path.
-      - ./infra/observability/prometheus/rules:/etc/prometheus/rules:ro
-    mem_limit: 512m
-    cpus: 1.0
-
-  alertmanager:
-    image: prom/alertmanager:v0.27.0
-    container_name: social-alertmanager
-    profiles: ["observability"]
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./infra/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    command:
-      - "--config.file=/etc/alertmanager/alertmanager.yml"
-      - "--storage.path=/alertmanager"
-    depends_on:
-      - webhook-sink
-    mem_limit: 256m
-    cpus: 0.5
-
-  webhook-sink:
-    build:
-      context: ./infra/observability/webhook-sink
-    container_name: social-webhook-sink
-    profiles: ["observability"]
-    ports:
-      - "8081:8080"
-    mem_limit: 128m
-    cpus: 0.25
-
-  grafana:
-    image: grafana/grafana:11.2.0
-    container_name: social-grafana
-    profiles: ["observability"]
-    ports:
-      - "3000:3000"
-    environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_USERS_DEFAULT_THEME: light
-    volumes:
-      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./infra/observability/grafana/dashboards:/etc/grafana/dashboards:ro
-    depends_on:
-      - prometheus
-      - tempo
-      - loki
-      - collector
-      - alertmanager
-    mem_limit: 512m
-    cpus: 1.0
-
-  tempo:
-    image: grafana/tempo:2.6.1
-    container_name: social-tempo
-    profiles: ["observability"]
-    command: ["-config.file=/etc/tempo.yaml"]
-    ports:
-      - "3200:3200"
-    volumes:
-      - ./infra/observability/tempo/tempo.yaml:/etc/tempo.yaml:ro
-    mem_limit: 512m
-    cpus: 1.0
-
-  collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
-    container_name: social-collector
-    profiles: ["observability"]
-    command: ["--config=/etc/otelcol-contrib/config.yaml"]
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-      # Slice 6: prometheus exporter (FE RUM metrics scrape target).
-      # Prometheus inside the docker network reaches this via
-      # `collector:8889`; publishing the host port lets a developer
-      # `curl http://localhost:8889/metrics` directly for debugging.
-      - "8889:8889"
-    volumes:
-      - ./infra/observability/collector/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
-      - ./infra/observability/logs:/var/log/backend:ro
-    mem_limit: 512m
-    cpus: 1.0
-
-  loki:
-    image: grafana/loki:3.2.0
-    container_name: social-loki
-    profiles: ["observability"]
-    command: ["-config.file=/etc/loki/local-config.yaml"]
-    # Expose 3100 on the host so e2e specs (and ad-hoc curl debugging)
-    # can hit Loki's HTTP API directly without going through Grafana.
-    # Grafana's Tempo→Loki tracesToLogs pivot uses the container DNS
-    # name (`http://loki:3100`) regardless of host port mapping.
-    ports:
-      - "3100:3100"
-    volumes:
-      - ./infra/observability/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
-    mem_limit: 512m
-    cpus: 1.0
-
-  # Slice 13: cAdvisor exposes per-container CPU / memory / network /
-  # filesystem / OOM-event metrics in Prometheus exposition format.
-  # The mount footprint is wide but, with one deliberate exception
-  # (the Docker socket, which is bidirectional by nature), exclusively
-  # read-only. It is the documented production posture for cAdvisor
-  # and is the standard Kubernetes / Docker observability pattern:
-  #
-  #   - `/:/rootfs:ro` — read host process / mount info to associate
-  #     container cgroups back to their daemon-side names.
-  #   - `/var/run/docker.sock:/var/run/docker.sock:rw` — talk to the
-  #     Docker daemon (which serves on a Unix domain socket; socket I/O
-  #     is intrinsically bidirectional, so `:ro` is not possible).
-  #     cAdvisor uses the daemon to map cgroup ids to container names —
-  #     without this connection every `container_*` series carries an
-  #     `id="/docker/<hash>"` label but NO `name=` label, which would
-  #     break every dashboard panel and alert rule (all keyed on
-  #     `name!=""`). The socket is mounted as a file (not the parent
-  #     directory) so the mount works portably on both Linux hosts and
-  #     macOS Docker Desktop (where `/var/run/docker.sock` is a symlink
-  #     forwarded by Docker Desktop into the underlying VM).
-  #   - `/sys:/sys:ro` — read the cgroup filesystem itself; this is the
-  #     source of every `container_*` metric family the slice depends
-  #     on (CFS throttling counters, memory.current/limit, OOM events).
-  #   - `/var/lib/docker/:/var/lib/docker:ro` — read the daemon's
-  #     metadata store so cAdvisor can resolve a cgroup path to a
-  #     container.
-  #   - `/dev/disk/:/dev/disk:ro` — read block-device topology so
-  #     filesystem-usage metrics are attributed to the right disk.
-  #
-  # `devices: ["/dev/kmsg"]` exposes the kernel ring buffer to cAdvisor;
-  # OOM detection (the source for `container_oom_events_total`) reads
-  # kernel-emitted OOM-kill notifications from `/dev/kmsg`. Without this,
-  # cAdvisor logs "Could not configure a source for OOM detection,
-  # disabling OOM events" on startup and the metric family is populated
-  # only with zero samples.
-  #
-  # Container port `8080` is published to host `8085` so the publish
-  # does NOT collide with the backend's host-side `:8080`.
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
-    container_name: social-cadvisor
-    profiles: ["observability"]
-    ports:
-      - "8085:8080"
-    volumes:
-      - /:/rootfs:ro
-      - /var/run/docker.sock:/var/run/docker.sock:rw
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-      - /dev/disk/:/dev/disk:ro
-    devices:
-      - /dev/kmsg
-    mem_limit: 256m
-    cpus: 0.5
-
   # Slice 15 (add-local-k3s-backend): a local OCI registry serves
   # as the host-side image store for the in-cluster backend. The
   # host pushes here via `./gradlew bootBuildImage -Ppublish=true`;
