@@ -48,5 +48,6 @@ configMapGenerator:
       - rules/fe-slo-recording.yml
       - rules/fe-slo-alerting.yml
       - rules/database-alerts.yml
+      - rules/container-alerts.yml
     options:
       disableNameSuffixHash: true
