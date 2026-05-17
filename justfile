@@ -31,6 +31,15 @@ OBS_LOCAL_OVERLAY := "infra/k8s-obs/overlays/local"
 OBS_CONTEXT := "social-obs"
 OBS_NAMESPACE := "observability"
 
+# Slice 19 (add-cross-cluster-mtls) — cert directory variables.
+# The CA cert + openssl.cnf live in the shared `infra/observability`
+# tree (one trust anchor, two clusters consume it); the per-cluster
+# leaf certs live alongside each collector's base kustomization so
+# the Kustomize secretGenerator can read them directly.
+OBS_CERTS_CA_DIR := "infra/observability/certs"
+OBS_CERTS_APP_DIR := "infra/k8s/base/collector/certs"
+OBS_CERTS_OBS_DIR := "infra/k8s-obs/base/collector/certs"
+
 # Default recipe: print the verb surface with its inline descriptions.
 default:
     @just --list
@@ -267,8 +276,101 @@ collector-rollout:
 # Boot the obs Lima VM (idempotent — first boot runs the shared
 # install-k3s.sh script, subsequent runs are a stop/start). Blocks
 # until the VM reaches Ready. Mirrors the app cluster's `vm-up`.
+#
+# Slice 19 (add-cross-cluster-mtls) bootstrap guard: if the shared
+# self-signed CA cert is missing, run `just obs-certs` first so the
+# Kustomize secretGenerators on both clusters have cert material to
+# fold into Secrets at apply time. The guard checks `ca.crt` only —
+# a missing leaf cert is a "developer manually deleted a file"
+# scenario which the loud-fail handshake error path (design.md
+# Decision 6) handles correctly.
 obs-up:
+    @if [ ! -f {{OBS_CERTS_CA_DIR}}/ca.crt ]; then echo "slice-19 mTLS: {{OBS_CERTS_CA_DIR}}/ca.crt missing — running 'just obs-certs' first."; just obs-certs; fi
     limactl start --name={{OBS_VM_NAME}} {{OBS_LIMA_YAML}}
+
+# Slice 19 (add-cross-cluster-mtls) — generate the cross-cluster
+# trust material end-to-end. Idempotent: re-running regenerates
+# every artifact (new random keys, new signed leaves). Kustomize
+# `secretGenerator`s hash the contents, so a re-run automatically
+# rolls the collector pods on the next `kubectl apply -k ...` —
+# rotation is therefore a one-command operation.
+#
+# Layout this recipe produces:
+#   infra/observability/certs/
+#     ca.crt              public, committed (10-year self-signed CA)
+#     ca.key              private, gitignored
+#     openssl.cnf         committed (subject DNs + extension blocks)
+#   infra/k8s-obs/base/collector/certs/
+#     server.crt          public, committed (1-year obs receiver cert)
+#     server.key          private, gitignored
+#     ca.crt              copy of the CA cert (server side verifies clients)
+#   infra/k8s/base/collector/certs/
+#     client.crt          public, committed (1-year app exporter cert)
+#     client.key          private, gitignored
+#     ca.crt              copy of the CA cert (client side verifies server)
+#
+# Bails loudly with an install hint if `openssl` is not on $PATH.
+# Uses the `set -euo pipefail` posture so any openssl step that
+# fails aborts the recipe (no partially-regenerated cert set).
+obs-certs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo "ERROR: 'openssl' not on PATH. macOS: 'brew install openssl' (and follow brew's PATH hint). Debian/Ubuntu: 'sudo apt install openssl'." >&2
+        exit 1
+    fi
+    CA_DIR="{{OBS_CERTS_CA_DIR}}"
+    APP_DIR="{{OBS_CERTS_APP_DIR}}"
+    OBS_DIR="{{OBS_CERTS_OBS_DIR}}"
+    CONFIG="${CA_DIR}/openssl.cnf"
+    mkdir -p "${CA_DIR}" "${APP_DIR}" "${OBS_DIR}"
+
+    # 1. Self-signed CA (10 years).
+    openssl req -x509 -new -nodes -newkey rsa:4096 -sha256 \
+        -days 3650 \
+        -keyout "${CA_DIR}/ca.key" \
+        -out "${CA_DIR}/ca.crt" \
+        -subj "/CN=prod-ready-social-media local CA/O=prod-ready-social-media/OU=slice-19-cross-cluster-mtls" \
+        -config "${CONFIG}" \
+        -extensions ca_ext
+
+    # 2. Obs collector server cert (1 year). CSR -> CA-signed leaf.
+    openssl req -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${OBS_DIR}/server.key" \
+        -out "${OBS_DIR}/server.csr" \
+        -subj "/CN=collector.observability.svc.cluster.local/O=prod-ready-social-media/OU=obs-collector"
+    openssl x509 -req -in "${OBS_DIR}/server.csr" \
+        -CA "${CA_DIR}/ca.crt" -CAkey "${CA_DIR}/ca.key" -CAcreateserial \
+        -out "${OBS_DIR}/server.crt" \
+        -days 365 -sha256 \
+        -extfile "${CONFIG}" -extensions server_ext
+    rm -f "${OBS_DIR}/server.csr"
+
+    # 3. App collector client cert (1 year). CSR -> CA-signed leaf.
+    openssl req -new -nodes -newkey rsa:2048 -sha256 \
+        -keyout "${APP_DIR}/client.key" \
+        -out "${APP_DIR}/client.csr" \
+        -subj "/CN=app-collector/O=prod-ready-social-media/OU=app-collector"
+    openssl x509 -req -in "${APP_DIR}/client.csr" \
+        -CA "${CA_DIR}/ca.crt" -CAkey "${CA_DIR}/ca.key" -CAcreateserial \
+        -out "${APP_DIR}/client.crt" \
+        -days 365 -sha256 \
+        -extfile "${CONFIG}" -extensions client_ext
+    rm -f "${APP_DIR}/client.csr"
+
+    # 4. Distribute the CA cert to both per-cluster dirs so each
+    #    side can verify the other's leaf at TLS handshake time.
+    cp "${CA_DIR}/ca.crt" "${OBS_DIR}/ca.crt"
+    cp "${CA_DIR}/ca.crt" "${APP_DIR}/ca.crt"
+
+    # 5. Clean the openssl serial file (each run uses -CAcreateserial
+    #    so the file is single-use).
+    rm -f "${CA_DIR}/ca.srl"
+
+    echo "slice-19 mTLS material written:"
+    echo "  CA:     ${CA_DIR}/ca.crt (+ ca.key, gitignored)"
+    echo "  server: ${OBS_DIR}/server.crt (+ server.key, gitignored; ca.crt copy)"
+    echo "  client: ${APP_DIR}/client.crt (+ client.key, gitignored; ca.crt copy)"
 
 # Stop the obs Lima VM. The on-disk image is preserved (PVC
 # contents survive); `just obs-up` resumes from the same state. Do

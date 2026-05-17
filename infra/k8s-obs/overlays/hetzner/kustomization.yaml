@@ -62,15 +62,37 @@
 #     50m/128m..500m/512m envelope assumes a single-developer
 #     trace volume.
 #   - Real TLS material on the OTLP receiver. Slice 19
-#     (`add-cross-cluster-mtls`) introduces cert-manager-issued
-#     client/server certs (a self-signed CA shared between the
-#     app cluster and the obs cluster); the certs land in a
-#     Secret mounted into this collector's pod, wired into the
-#     `otlp` receiver's `protocols.grpc.tls:` / `protocols.http.tls:`
-#     blocks (`cert_file`, `key_file`, `client_ca_file`). Until
-#     slice 19 lands, the local overlay accepts cleartext OTLP
-#     from anything that reaches `host.lima.internal:14317`
-#     (acceptable on the Lima loopback; NOT acceptable in prod).
+#     (`add-cross-cluster-mtls`) landed the cross-cluster trust
+#     model on the LOCAL mirror: a shared self-signed CA is the
+#     trust anchor for both clusters; the obs collector's OTLP
+#     receiver mounts a server cert + key + CA cert at
+#     /etc/otelcol-contrib/certs/ and requires CA-signed client
+#     certs at the TLS handshake (via configtls's implicit
+#     RequireAndVerifyClientCert when client_ca_file is set in
+#     otelcol-contrib v0.111.0; `require_client_cert: true`
+#     becomes explicit on the v0.112.0+ bump).
+#
+#     For prod (slice 23, add-hetzner-deploy), the slice-19 trust
+#     model carries forward UNCHANGED — the same self-signed CA
+#     stays the cross-cluster trust anchor; only the cert
+#     DISTRIBUTION mechanism changes:
+#       - cert-manager + a self-signed `ClusterIssuer` of kind
+#         `SelfSigned` produces and rotates the server cert
+#         (and the app cluster's client cert), so the CA private
+#         key is NEVER kept on disk on a developer machine. The
+#         CA private key lives in a Secret managed by the
+#         issuer, accessible only to cert-manager.
+#       - The server cert's SAN list swaps `host.lima.internal`
+#         for the obs box's production address (private-network
+#         IP / Tailscale hostname / DNS name).
+#       - Renewals are automated by cert-manager (default
+#         renewal at 2/3 of the cert's validity); the
+#         slice-19 manual `just obs-certs` recipe is local-only.
+#       - The Deployment volume mount and the configmap
+#         receiver `tls:` blocks remain identical — cert-manager
+#         materialises the same {server.crt, server.key, ca.crt}
+#         file set into the same Secret name the slice-19
+#         secretGenerator produces today.
 #   - Ingress or LoadBalancer that terminates inbound OTLP on
 #     the obs box's public / private IP. Local overlay uses
 #     klipper-lb + Lima portForwards; on Hetzner this is

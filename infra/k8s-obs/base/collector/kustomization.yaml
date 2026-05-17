@@ -37,6 +37,20 @@ resources:
   - ./deployment.yaml
   - ./service.yaml
 
+# Slice 19 (add-cross-cluster-mtls). Pull the obs-side server cert
+# + key + CA cert from ./certs/ into a Kubernetes Secret. The
+# Deployment mounts this Secret at /etc/otelcol-contrib/certs/; the
+# OTLP receiver's `tls:` block under both `protocols.grpc` and
+# `protocols.http` references those paths. Same hashing posture as
+# the app collector — no `disableNameSuffixHash: true`, so re-running
+# `just obs-certs` re-rolls the pod automatically.
+secretGenerator:
+  - name: collector-certs
+    files:
+      - certs/server.crt
+      - certs/server.key
+      - certs/ca.crt
+
 images:
   - name: otel/opentelemetry-collector-contrib
     newTag: 0.111.0

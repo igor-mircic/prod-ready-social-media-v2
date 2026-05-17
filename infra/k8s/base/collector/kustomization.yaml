@@ -34,6 +34,22 @@ resources:
   - ./deployment.yaml
   - ./service.yaml
 
+# Slice 19 (add-cross-cluster-mtls). Pull the per-cluster client
+# cert + key + CA cert from ./certs/ into a Kubernetes Secret. The
+# Deployment mounts this Secret at /etc/otelcol-contrib/certs/; the
+# three `otlp/obs-cluster*` exporters reference those paths in their
+# tls: blocks. No `disableNameSuffixHash: true` — we WANT Kustomize
+# to suffix the Secret name with a content hash so that re-running
+# `just obs-certs` (which re-keys every leaf) produces a new Secret
+# name and Kustomize-driven `kubectl apply` automatically rolls the
+# collector pod. Cert rotation is therefore one command.
+secretGenerator:
+  - name: collector-certs
+    files:
+      - certs/client.crt
+      - certs/client.key
+      - certs/ca.crt
+
 images:
   - name: otel/opentelemetry-collector-contrib
     newTag: 0.111.0

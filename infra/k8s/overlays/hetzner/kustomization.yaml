@@ -117,14 +117,32 @@
 #     (`retire-compose-observability`) collapses dual-write to
 #     single-exporter at the BASE level before any Hetzner
 #     cutover; this stub is the defence-in-depth reminder.
-#   - TLS / mTLS material reference: a Secret holding the
-#     collector's client cert + key for the cross-cluster export,
-#     mounted into the pod via `volumes:` + `volumeMounts:` and
-#     wired into the exporter's `tls.cert_file` / `tls.key_file` /
-#     `tls.ca_file` fields. The Secret is created out-of-band by
-#     the Hetzner slice's bootstrap script (cert-manager + a
-#     self-signed CA shared with the obs cluster — slice 19's
-#     decision).
+#   - TLS / mTLS material reference. Slice 19
+#     (`add-cross-cluster-mtls`) landed the cross-cluster mTLS
+#     trust model on the LOCAL mirror: a shared self-signed CA
+#     is the trust anchor for both clusters; the app collector
+#     mounts {client.crt, client.key, ca.crt} at
+#     /etc/otelcol-contrib/certs/ and the three
+#     `otlp/obs-cluster*` exporters present that client cert at
+#     the TLS handshake. The slice-19 self-signed-CA trust model
+#     CARRIES FORWARD UNCHANGED into prod (slice 23,
+#     `add-hetzner-deploy`); only the cert DISTRIBUTION mechanism
+#     changes:
+#       - cert-manager + a self-signed `ClusterIssuer` of kind
+#         `SelfSigned` produces and rotates the client cert; the
+#         CA private key is NEVER on a developer's disk in prod
+#         (lives in a Secret managed by the issuer).
+#       - The exporter endpoint host swaps from
+#         `host.lima.internal:14317/14318` (the local mirror) to
+#         the obs box's production address (private-network IP /
+#         Tailscale hostname / DNS), but the `tls:` block
+#         contents stay file-path-identical — cert-manager
+#         materialises the same {client.crt, client.key, ca.crt}
+#         file set into the same Secret name the slice-19
+#         secretGenerator produces today.
+#       - Renewals are automated by cert-manager (default
+#         renewal at 2/3 of the cert's validity); the slice-19
+#         manual `just obs-certs` recipe is local-only.
 #   - Tighter probe timings: `livenessProbe.timeoutSeconds`
 #     explicit at 1s, `readinessProbe.periodSeconds` perhaps 3s,
 #     `livenessProbe.initialDelaySeconds` lower (the contrib

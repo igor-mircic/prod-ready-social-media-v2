@@ -1,19 +1,33 @@
-# Obs cluster OpenTelemetry Collector pipeline (slice 18b / 18c).
+# Obs cluster OpenTelemetry Collector pipeline (slice 18b / 18c / 19).
 #
 # Three pipelines (slice 18c added logs and metrics symmetric with the
 # slice-18b traces dual-write from the app cluster):
 #   OTLP receiver (gRPC :4317, HTTP :4318, NO CORS — only the app
 #                  cluster collector dials this receiver via the
-#                  klipper-lb-fronted LoadBalancer Service `collector`)
+#                  klipper-lb-fronted LoadBalancer Service `collector`).
+#                  Slice 19 wraps BOTH protocol listeners in mTLS:
+#                  each `tls:` block declares cert_file + key_file +
+#                  client_ca_file, which in otelcol-contrib v0.111.0
+#                  implicitly forces tls.RequireAndVerifyClientCert
+#                  (see the receiver block below for the upstream
+#                  rename note — a `require_client_cert` key was
+#                  added in v0.112.0+ but does not exist in 0.111.0).
 #     -> batch
 #     -> traces:  transform/redact-path-ids
-#                 -> otlp/tempo   (tempo.observability.svc.cluster.local:4317, tls insecure)
+#                 -> otlp/tempo   (tempo.observability.svc.cluster.local:4317, plaintext, same cluster)
 #     -> logs:    transform/redact-path-ids
 #                 -> otlphttp/loki (http://loki.observability.svc.cluster.local:3100/otlp,
-#                                   Loki 3.x native OTLP ingest)
+#                                   Loki 3.x native OTLP ingest, plaintext, same cluster)
 #     -> metrics: (batch only)
 #                 -> prometheusremotewrite/in-cluster
-#                    (http://prometheus-server.observability.svc.cluster.local/api/v1/write)
+#                    (http://prometheus-server.observability.svc.cluster.local/api/v1/write,
+#                     plaintext, same cluster)
+#
+# Slice 19 (add-cross-cluster-mtls) lands TLS material only on the
+# receiver side here. The three in-cluster exporters (tempo / loki /
+# prometheus) STAY plaintext because they do not cross a VM boundary
+# — same-cluster ClusterIP traffic is not in scope for cross-cluster
+# mTLS (design.md Decision 2).
 #
 # Source-of-truth sibling for the `transform/redact-path-ids` OTTL
 # block: `infra/k8s/base/collector/configmap.yaml` (the app cluster
@@ -51,10 +65,32 @@ data:
     receivers:
       otlp:
         protocols:
+          # Slice 19 (add-cross-cluster-mtls). Both protocol listeners
+          # require client cert auth against the shared self-signed CA.
+          #
+          # NOTE on the missing `require_client_cert` key: that key was
+          # added in otelcol-contrib v0.112.0+. This deploy is pinned to
+          # v0.111.0 (see ../kustomization.yaml `images:`). In v0.111.0
+          # the configtls.ServerConfig struct has only ClientCAFile (no
+          # explicit "require" toggle); its LoadTLSConfig() sets
+          # tls.Config.ClientAuth to tls.RequireAndVerifyClientCert
+          # whenever ClientCAFile is non-empty, which gives us the
+          # same end behavior — a client without a CA-signed cert is
+          # rejected at the TLS handshake. When this collector is
+          # eventually bumped past 0.112.0, ADD `require_client_cert: true`
+          # to make the intent explicit; behavior is unchanged.
           grpc:
             endpoint: 0.0.0.0:4317
+            tls:
+              cert_file: /etc/otelcol-contrib/certs/server.crt
+              key_file: /etc/otelcol-contrib/certs/server.key
+              client_ca_file: /etc/otelcol-contrib/certs/ca.crt
           http:
             endpoint: 0.0.0.0:4318
+            tls:
+              cert_file: /etc/otelcol-contrib/certs/server.crt
+              key_file: /etc/otelcol-contrib/certs/server.key
+              client_ca_file: /etc/otelcol-contrib/certs/ca.crt
 
     processors:
       batch: {}

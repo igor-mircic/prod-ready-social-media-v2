@@ -1,0 +1,4 @@
+# Slice 19 (add-cross-cluster-mtls). Private key material for the
+# cross-cluster self-signed CA stays out of git. `ca.crt`,
+# `openssl.cnf`, and this file are public and SHALL be committed.
+*.key
