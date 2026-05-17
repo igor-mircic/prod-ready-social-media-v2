@@ -1,0 +1,93 @@
+# metrics-cluster-agent collector pipeline — slice 21
+# (add-k3s-cluster-metrics). One signal type only: metrics.
+#
+# Pipeline shape:
+#   k8s_cluster (auth_type: serviceAccount, collection_interval:
+#                15s, node_conditions_to_report: Ready +
+#                MemoryPressure + DiskPressure + PIDPressure +
+#                NetworkUnavailable — every operator-useful
+#                condition, near-zero cardinality cost; see
+#                design.md Open Question 2)
+#     -> batch
+#     -> otlp -> collector.social.svc.cluster.local:4317 (gRPC,
+#                                                          plaintext,
+#                                                          in-cluster)
+#
+# The gateway collector's metrics pipeline then carries this
+# through the slice-19 mTLS envelope to obs prometheus
+# (slice 18c wired the prometheusremotewrite/in-cluster
+# exporter). The agent has no cert material — single security
+# boundary at the gateway (design.md Decision 2).
+#
+# This is the cluster-scoped half of the slice-21 metrics-side
+# split. The per-node half lives at
+# `infra/k8s/base/metrics-agent/` as a DaemonSet running the
+# kubeletstats + hostmetrics receivers. Two pods, not one,
+# because the receivers split cleanly along a scoping axis
+# (design.md Decision 1).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: metrics-cluster-agent-config
+data:
+  config.yaml: |
+    receivers:
+      # Apiserver-watch receiver. Emits cluster-state families:
+      # k8s_namespace_phase, k8s_pod_phase,
+      # k8s_deployment_desired / k8s_deployment_available,
+      # k8s_replicaset_*, k8s_statefulset_*, k8s_daemonset_*,
+      # k8s_node_condition_*, k8s_persistentvolumeclaim_phase,
+      # k8s_container_restarts, and workload-allocatable
+      # resource families.
+      k8s_cluster:
+        auth_type: serviceAccount
+        collection_interval: 15s
+        # Every operator-useful node condition. Default is
+        # `[Ready]`; expanding to all five gives saturation
+        # signals at near-zero cardinality cost — each adds
+        # one series per node × condition. See design.md
+        # Open Question 2 for the rationale.
+        node_conditions_to_report:
+          - Ready
+          - MemoryPressure
+          - DiskPressure
+          - PIDPressure
+          - NetworkUnavailable
+
+    processors:
+      batch: {}
+
+    extensions:
+      # Bind explicitly to 0.0.0.0 — the contrib collector's
+      # health_check extension defaults to `localhost:13133`,
+      # which the kubelet probe cannot reach from outside the
+      # pod's network namespace. Binding all interfaces is safe:
+      # the port is not on any Service, so only the pod-local
+      # kubelet probe ever reaches it (same posture as the
+      # slice-20 log-agent and the slice-21 metrics-agent).
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    exporters:
+      # In-cluster plaintext OTLP/gRPC to the gateway collector.
+      # The gateway then wraps the cross-cluster hop in mTLS
+      # (slice 19) — see infra/k8s/base/collector/configmap.yaml.
+      # The agent intentionally has no cert material; a single
+      # security boundary at the gateway is the design
+      # (design.md Decision 2 / slice-20 Decision 2 carry-over).
+      otlp:
+        endpoint: collector.social.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        # Exactly one pipeline — no logs, no traces. The
+        # per-node metrics-agent owns kubeletstats + hostmetrics;
+        # this agent owns k8s_cluster alone (design.md
+        # Decision 1).
+        metrics:
+          receivers: [k8s_cluster]
+          processors: [batch]
+          exporters: [otlp]

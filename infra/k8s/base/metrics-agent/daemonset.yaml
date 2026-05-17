@@ -1,0 +1,106 @@
+# metrics-agent DaemonSet — slice 21 (add-k3s-cluster-metrics).
+# One pod per node; tolerates the control-plane taint so it
+# schedules on the only node of a single-node k3s cluster
+# AND on every worker on a future multi-node Hetzner cluster
+# (design.md Decision 1 + slice-20 Decision 8 carry-over).
+# Mounts the host root read-only at /hostfs so the hostmetrics
+# receiver can read /proc, /sys, and filesystem stats.
+#
+# Image is referenced by name without an inline tag; the
+# directory's `kustomization.yaml` `images:` directive resolves
+# the tag (otel/opentelemetry-collector-contrib:0.111.0, same
+# pin as the gateway, the log-agent, and the obs cluster
+# collector — one bump moves all four).
+#
+# Probes target the bundled `health_check` extension on :13133.
+# The container does NOT expose any OTLP port — the agent is a
+# client of the gateway, not a server.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: metrics-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metrics-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metrics-agent
+    spec:
+      serviceAccountName: metrics-agent
+      # Tolerate every taint (design.md Decision 1; mirrors
+      # slice-20 log-agent Decision 8). On a single-node k3s
+      # cluster the only node carries the control-plane taint
+      # and the agent would not schedule without this. On a
+      # multi-node cluster we still want a pod on every node
+      # — node-level metrics live wherever the kubelet runs.
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: metrics-agent
+          image: otel/opentelemetry-collector-contrib
+          args:
+            - --config=/etc/otelcol-contrib/config.yaml
+          env:
+            # Downward-API injection of the local node's name.
+            # The kubeletstats receiver's `endpoint:` template
+            # (`https://${env:NODE_NAME}:10250`) reads this at
+            # collector start.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: healthcheck
+              containerPort: 13133
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # Same envelope as the slice-20 log-agent
+              # (design.md Decision 8): per-pod work is similar
+              # in shape (scrape a source, batch, OTLP/gRPC to
+              # a local Service) and one envelope across agents
+              # is one less thing for operators to learn.
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib
+              readOnly: true
+            # Host root mounted read-only for the hostmetrics
+            # receiver's filesystem / disk / network / paging
+            # scrapers. `root_path: /hostfs` in the configmap
+            # tells the receiver to translate `/proc`, `/sys`,
+            # etc. through this prefix.
+            - name: hostfs
+              mountPath: /hostfs
+              readOnly: true
+              mountPropagation: HostToContainer
+      volumes:
+        - name: config
+          configMap:
+            name: metrics-agent-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: hostfs
+          hostPath:
+            path: /
+            type: Directory

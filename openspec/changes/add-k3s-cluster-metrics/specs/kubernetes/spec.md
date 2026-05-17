@@ -174,18 +174,20 @@ The metrics-cluster-agent container SHALL declare `livenessProbe` and `readiness
 
 ### Requirement: Cluster metrics land in obs prometheus end-to-end
 
-After the slice is applied, the obs cluster's prometheus SHALL contain at least one sample of `k8s_node_cpu_utilization` (from the metrics-agent's kubeletstats receiver), at least one sample of `system_cpu_utilization` (from the metrics-agent's hostmetrics receiver), and at least one sample of `k8s_deployment_available` (from the metrics-cluster-agent's k8s_cluster receiver), within two scrape intervals (30s) of the agents becoming Ready.
+After the slice is applied, the obs cluster's prometheus SHALL contain at least one sample of `k8s_node_cpu_utilization_ratio` (from the metrics-agent's kubeletstats receiver), at least one sample of `system_memory_usage_bytes` (from the metrics-agent's hostmetrics receiver), and at least one sample of `k8s_deployment_available` (from the metrics-cluster-agent's k8s_cluster receiver), within two scrape intervals (30s) of the agents becoming Ready.
+
+Names carry the unit suffixes the `prometheusremotewrite` exporter appends as part of its OpenMetrics-conformant translation (`_ratio` for ratio-typed metrics, `_bytes` for byte-typed gauges, `_bytes_total` for byte-typed cumulative counters). The OTel-dotted name in v0.111.0 contrib (e.g. `k8s.node.cpu.utilization`) translates to the underscored-plus-suffixed prometheus name (e.g. `k8s_node_cpu_utilization_ratio`).
 
 #### Scenario: Per-node kubeletstats metric is queryable
 
 - **WHEN** both new pods have been Ready for at least 30s
-- **AND** an operator queries the obs prometheus via grafana Explore: `k8s_node_cpu_utilization`
+- **AND** an operator queries the obs prometheus via grafana Explore: `k8s_node_cpu_utilization_ratio`
 - **THEN** at least one series is returned with a `k8s_node_name` label matching the cluster's node
 
 #### Scenario: hostmetrics scraper output is queryable
 
 - **WHEN** both new pods have been Ready for at least 30s
-- **AND** an operator queries `system_memory_usage{state="used"}`
+- **AND** an operator queries `system_memory_usage_bytes{state="used"}`
 - **THEN** at least one series is returned with a `host_name` label matching the cluster's node
 
 #### Scenario: k8s_cluster cluster-state metric is queryable
@@ -202,16 +204,17 @@ Panel coverage SHALL include at minimum:
 - Node CPU utilization per node (gauge or time-series)
 - Node memory used/available per node
 - Node load1/load5/load15 per node
-- Node disk used % per mountpoint
+- Node filesystem usage by mountpoint
 - Node network rx/tx bytes/sec per node
-- Per-namespace pod CPU usage (time-series, summed by namespace)
+- Per-namespace pod CPU utilization (time-series, summed by namespace)
 - Per-namespace pod memory working-set (time-series, summed by namespace)
-- Deployment desired vs available replicas (stat panel with thresholds)
-- Pod phase distribution (stacked bar)
+- Top-N pods by CPU and by memory
+- Deployment available replicas (stat panel with thresholds)
+- Pod phase distribution by namespace (stacked / bar)
 - Container restart count over the last 1h (expected 0)
-- PVC phase / used %
+- Persistent volume capacity (bytes) and used % per pod-mounted volume
 
-All panel PromQL SHALL target OTel-translated metric names (e.g. `k8s_node_cpu_utilization`, `k8s_pod_memory_working_set`, `k8s_deployment_available`), NOT cAdvisor names (`container_cpu_usage_seconds_total`).
+All panel PromQL SHALL target OTel-translated metric names with the OpenMetrics-conformant unit suffixes the `prometheusremotewrite` exporter appends (e.g. `k8s_node_cpu_utilization_ratio`, `k8s_pod_memory_working_set_bytes`, `k8s_deployment_available`, `system_network_io_bytes_total`), NOT cAdvisor names (`container_cpu_usage_seconds_total`).
 
 #### Scenario: Dashboard file exists
 

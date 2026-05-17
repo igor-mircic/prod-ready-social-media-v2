@@ -456,9 +456,9 @@ property is never broken.
    certs in both clusters; cross-cluster OTLP becomes mTLS only.
 4. **slice 20** `add-k3s-pod-log-shipping` — DaemonSet ships pod
    logs over OTLP to the obs cluster's loki. (done)
-5. **slice 21** `add-k3s-cluster-metrics` — kubelet + cAdvisor +
-   node-exporter scrape via the app collector; cluster dashboards
-   in obs grafana.
+5. **slice 21** `add-k3s-cluster-metrics` — kubeletstats + hostmetrics
+   + k8s_cluster receivers on per-node DaemonSet and singleton
+   Deployment agents; cluster-overview dashboard in obs grafana. (done)
 6. **slice 22** `retire-compose-observability` — delete compose
    prometheus/grafana/tempo/loki/alertmanager/collector; migrate
    any remaining dashboards/rules; obs lives only in the obs cluster.
@@ -1099,6 +1099,135 @@ Daily verbs:
 - Log-based alerting — defaults from the slice-17 Loki chart values
   stand; alerting is a future slice's concern.
 - Retention or index-cardinality tuning — chart defaults stand.
+
+### Cluster metrics
+
+Slice 21 (`add-k3s-cluster-metrics`) closes the last of three signal
+gaps on the obs cluster — node, pod, and cluster-state metrics join
+the cross-cluster transport spine alongside backend traces
+(slices 18a/b), FE error logs + web vitals (slice 18c), and backend
+pod logs (slice 20). Two new workloads under
+`infra/k8s/base/`:
+
+- `metrics-agent/` — a DaemonSet running one OpenTelemetry Collector
+  pod per node. Its `kubeletstats` receiver scrapes the local
+  kubelet at `https://${NODE_NAME}:10250` every 15s (per-node CPU /
+  memory, per-pod CPU / memory, per-container, per-volume); its
+  `hostmetrics` receiver reads `/proc` and `/sys` through a
+  read-only hostPath mount (node CPU / memory / load / disk /
+  filesystem / network / paging / processes).
+- `metrics-cluster-agent/` — a singleton Deployment running the
+  `k8s_cluster` receiver against the apiserver every 15s
+  (deployment desired / available, replicaset / statefulset /
+  daemonset state, pod phase, container restart counts, PVC phase,
+  node conditions).
+
+Both ship OTLP/gRPC plaintext to the in-cluster gateway collector
+(`collector.social.svc.cluster.local:4317`). The gateway then
+carries them through the slice-19 mTLS envelope to the obs
+cluster's prometheus via the slice-18c `prometheusremotewrite/in-cluster`
+exporter. Same agent/gateway pattern slice 20 established — the
+agents have no cert material, the single security boundary lives
+on the gateway.
+
+The OTel-receiver-side approach was chosen over enabling the
+prometheus chart's bundled `kube-state-metrics` / `prometheus-node-exporter`
+subcharts and default scrape jobs because:
+
+- One direction of cross-cluster flow (app → obs, always). A
+  chart-side scrape would invert the flow (this prom pulling
+  from the app cluster's kubelet / apiserver) and demand a
+  second auth model on top of the slice-19 mTLS envelope.
+- One security envelope at the gateway.
+- One image pin (`otel/opentelemetry-collector-contrib:0.111.0`)
+  shared across all four collector pods — gateway, log-agent,
+  metrics-agent, metrics-cluster-agent.
+
+```
+  ┌───────────────────────────────────────────────────┐
+  │ app cluster (lima-social)                         │
+  │                                                   │
+  │  kubelet :10250 ── kubeletstats ───┐              │
+  │  /proc, /sys   ── hostmetrics ───┐ │              │
+  │                                  │ │              │
+  │   ┌──────────────────┐           │ │              │
+  │   │ metrics-agent    │ ◄─────────┘ │              │
+  │   │ DaemonSet        │             │              │
+  │   │ (per node)       │ ◄───────────┘              │
+  │   └────────┬─────────┘                            │
+  │            │                                      │
+  │  apiserver ─── k8s_cluster ──┐                    │
+  │            │                 │                    │
+  │   ┌──────────────────┐       │                    │
+  │   │ metrics-cluster- │ ◄─────┘                    │
+  │   │ agent Deployment │                            │
+  │   │ (singleton)      │                            │
+  │   └────────┬─────────┘                            │
+  │            │ OTLP/gRPC :4317 (plaintext, in-cluster)
+  │            ▼                                      │
+  │   ┌──────────────────┐                            │
+  │   │ gateway          │  metrics pipeline:         │
+  │   │ collector        │  batch → dual-write        │
+  │   │                  │  → obs-cluster (mTLS)      │
+  │   │                  │  → compose-relay (local)   │
+  │   └────────┬─────────┘                            │
+  │            │ mTLS (slice 19)                      │
+  └────────────┼──────────────────────────────────────┘
+               ▼
+       obs collector → prometheus remote-write → obs prometheus → obs grafana
+```
+
+Apply behavior — both workloads ship with the base overlay, so
+`just k8s-apply` rolls them out the same way it rolls out the
+backend, frontend, postgres, gateway collector, and log-agent.
+No separate verb needed.
+
+End-to-end loop on the local mirror:
+
+```sh
+just vm-up           # app cluster (no-op if running)
+just obs-up          # obs cluster (no-op if running)
+just k8s-apply       # rolls out metrics-agent + metrics-cluster-agent
+# Wait one scrape interval (15s) plus prometheus WAL flush (~15s).
+just obs-grafana     # in a side terminal; obs grafana on :3001
+# In obs grafana → Dashboards → Browse, open "Cluster overview".
+# Every panel renders within ~30 seconds of the agents reaching Ready.
+# In Explore → Prometheus, sanity queries (names carry the
+# OpenMetrics-conformant unit suffixes prometheusremotewrite
+# appends — `_ratio` for ratios, `_bytes` for byte gauges):
+#   k8s_node_cpu_utilization_ratio          # per-node CPU, kubeletstats
+#   system_memory_usage_bytes{state="used"} # per-node memory, hostmetrics
+#   k8s_deployment_available                # cluster state, k8s_cluster
+```
+
+Daily verbs:
+
+- `just metrics-agent-logs` — tail the DaemonSet's pods (label-scoped;
+  follows).
+- `just metrics-agent-rollout` — rolling restart against the DaemonSet
+  after a ConfigMap edit; blocks on rollout-status.
+- `just metrics-cluster-agent-logs` — tail the singleton Deployment's
+  pod (follows).
+- `just metrics-cluster-agent-rollout` — rolling restart against the
+  Deployment after a ConfigMap edit; blocks on rollout-status.
+
+**Non-goals (slice 21 deliberately does not ship):**
+
+- A Prometheus Operator install. The README design constraint stands —
+  every LGTM chart is deployed bare, CRD-based stacks are out of scope.
+- Control-plane metrics (kube-scheduler / kube-controller-manager / etcd).
+  k3s embeds these in the supervisor process and does not expose
+  separate `/metrics` endpoints without server flags — a future slice
+  can wire them.
+- Alerting rules on cluster metrics. A future alerting slice decides
+  which thresholds page.
+- Cardinality engineering / metric filtering / retention tuning. Chart
+  defaults stand for this slice; the Hetzner overlay stub flags PVC
+  and retention re-sizing for production.
+- A compose-side `cluster-overview` dashboard. Compose dies in slice
+  22; building the dashboard now would be churn. Side-by-side
+  comparability during the slice 21 → 22 window runs as ad-hoc PromQL
+  in compose grafana's Explore tab.
 
 ### Frontend tracing
 

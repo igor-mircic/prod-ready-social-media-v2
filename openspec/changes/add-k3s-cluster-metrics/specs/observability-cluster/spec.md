@@ -26,6 +26,23 @@ This is a narrative-only requirement: the chart's runtime configuration is uncha
 - **THEN** any reference to slice 21 describes the OTel-receiver-side path (metrics-agent / metrics-cluster-agent agents shipping via remote-write), NOT a future chart-side scrape-job activation
 - **AND** no comment claims that kube-state-metrics or prometheus-node-exporter subcharts will be enabled in slice 21
 
+### Requirement: The obs collector promotes OTel resource attributes to prometheus labels
+
+The obs collector's `prometheusremotewrite/in-cluster` exporter (at `infra/k8s-obs/base/collector/configmap.yaml`) SHALL declare `resource_to_telemetry_conversion.enabled: true`. Without this setting, the exporter drops OTel resource attributes (`k8s.node.name`, `k8s.namespace.name`, `k8s.pod.name`, `host.name`, etc.) and emits unlabeled prometheus series — the cluster-overview dashboard's per-node / per-namespace / per-pod queries would have nothing to group by.
+
+This is a one-key addition; the rest of the obs collector's metrics pipeline shape (`otlp` receiver → `batch` processor → `prometheusremotewrite/in-cluster` exporter) is unchanged from slice 18c.
+
+#### Scenario: Resource attribute promotion is enabled
+
+- **WHEN** a reader inspects `infra/k8s-obs/base/collector/configmap.yaml`
+- **THEN** the `exporters.prometheusremotewrite/in-cluster:` block declares `resource_to_telemetry_conversion:` with `enabled: true`
+
+#### Scenario: Series carry the cluster-shaped labels
+
+- **WHEN** both new app-cluster pods have been Ready for at least 30s
+- **AND** an operator queries `k8s_deployment_available{k8s_deployment_name="backend"}` against obs prometheus
+- **THEN** the returned series carries at least the labels `k8s_deployment_name`, `k8s_namespace_name`, and `k8s_cluster_name` (the standard k8s_cluster resource attribute set, dotted-to-underscored)
+
 ### Requirement: The obs grafana chart provisions the `cluster-overview` dashboard
 
 The obs grafana chart (`infra/k8s-obs/base/grafana/`) SHALL provision a `cluster-overview.json` dashboard automatically alongside the existing slice-17 `custom-dashboard.json`. The provisioning mechanism SHALL be whichever shape the slice-17 chart already uses (a `dashboardProviders:` + `dashboards:` block in values.yaml, or a sibling ConfigMap mounted via `extraConfigmapMounts`) — slice 21 SHALL NOT introduce a competing provisioning mechanism alongside the existing one.

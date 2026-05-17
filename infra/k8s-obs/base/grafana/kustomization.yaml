@@ -22,3 +22,20 @@ helmCharts:
 
 resources:
 - ./secret.yaml
+
+# Slice 21 (add-k3s-cluster-metrics): wrap every dashboard JSON
+# under ./dashboards/ in a ConfigMap whose name the grafana
+# chart's `dashboardsConfigMaps.default` setting in values.yaml
+# references. `disableNameSuffixHash: true` keeps the name
+# stable across re-renders so the chart's
+# `dashboardsConfigMaps:` reference resolves; dashboard edits
+# are picked up via `kubectl rollout restart deploy/grafana`
+# (kubelet does NOT auto-restart pods when a mounted
+# ConfigMap's data changes — same posture every other slice's
+# collector ConfigMaps take).
+configMapGenerator:
+  - name: grafana-dashboards-default
+    files:
+      - dashboards/cluster-overview.json
+    options:
+      disableNameSuffixHash: true

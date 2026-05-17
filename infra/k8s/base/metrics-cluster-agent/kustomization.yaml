@@ -1,0 +1,39 @@
+# OpenTelemetry Collector Deployment — slice 21
+# (add-k3s-cluster-metrics). Singleton pod (`replicas: 1`)
+# watching the apiserver via the `k8s_cluster` receiver;
+# ships OTLP/gRPC plaintext to the gateway collector
+# (`collector.social.svc.cluster.local:4317`). The gateway is
+# the only thing on the app cluster that knows about the obs
+# cluster; the agent has no cert material.
+#
+# This is the cluster-scoped half of the slice-21 metrics-side
+# split (design.md Decision 1). The per-node half lives at
+# `infra/k8s/base/metrics-agent/` as a DaemonSet running the
+# kubeletstats + hostmetrics receivers. The split is inherent
+# to the receivers — kubeletstats/hostmetrics are per-node,
+# k8s_cluster is per-cluster.
+#
+# Image tag is pinned via the `images:` directive below so
+# bumping it is a one-line edit. The Deployment references the
+# image by name without an inline tag — same convention as
+# infra/k8s/base/log-agent/kustomization.yaml,
+# infra/k8s/base/metrics-agent/kustomization.yaml, and
+# infra/k8s/base/collector/kustomization.yaml.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: metrics-cluster-agent
+      app.kubernetes.io/part-of: social
+
+resources:
+  - ./serviceaccount.yaml
+  - ./rbac.yaml
+  - ./configmap.yaml
+  - ./deployment.yaml
+
+images:
+  - name: otel/opentelemetry-collector-contrib
+    newTag: 0.111.0

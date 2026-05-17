@@ -213,6 +213,68 @@
 #     hostPath-mounted bookkeeping directory so the read
 #     offsets survive restarts.
 #
+# Slice 21 (add-k3s-cluster-metrics) — the next slice
+# (add-hetzner-deploy) will plug the cluster-metrics agents
+# (metrics-agent DaemonSet + metrics-cluster-agent Deployment)
+# pieces in here:
+#
+#   - Multi-node tolerations review for the metrics-agent
+#     DaemonSet. The local overlay's `tolerations: [{operator:
+#     Exists}]` posture covers a single-node control-plane-
+#     tainted cluster AND multi-node clusters where every node
+#     should run the agent (including taint-carrying master
+#     nodes). On Hetzner that posture stays correct, but the
+#     Hetzner slice should re-confirm against any
+#     workload-specific taints the multi-node design
+#     introduces (e.g. a GPU node pool the metrics-agent
+#     should not necessarily land on).
+#   - Leader election for the metrics-cluster-agent. The local
+#     overlay runs a singleton Deployment (`replicas: 1`) —
+#     fine on a single-node cluster, but on multi-node prod a
+#     pod restart leaves a brief metrics gap. The Hetzner
+#     answer is bump `replicas: 2` and wire the
+#     `k8s_leader_elector` extension on the configmap so only
+#     the leader's `k8s_cluster` receiver emits; the standby
+#     takes over on leader-pod failure. The extension is
+#     bundled in the contrib collector image we already pin,
+#     so it's a configmap-only change.
+#   - Kubelet TLS verification. The local overlay's
+#     `kubeletstats` receiver uses `insecure_skip_verify: true`
+#     because the k3s kubelet ships a self-signed cert that
+#     rotates on every restart and the connection is pod-on-
+#     node-N to kubelet-of-node-N (never cross-node) with
+#     SA-token auth — encryption-in-transit only. On Hetzner
+#     the production stance MUST be one of: (a) hostPath-mount
+#     `/var/lib/rancher/k3s/server/tls/server-ca.crt` and set
+#     `ca_file:` in the receiver's tls block to pin the k3s
+#     CA, OR (b) provision a CA-signed kubelet serving cert at
+#     install time (k3s `--kubelet-cert-tls` flag) and pin
+#     that. The `insecure_skip_verify: true` flag MUST NOT
+#     carry over.
+#   - Resource cap re-sizing. Both agents size at `requests:
+#     cpu=50m / memory=128Mi`, `limits: cpu=200m / memory=256Mi`
+#     locally — sized for a single-node Lima VM with a handful
+#     of pods per node. On Hetzner the metrics-agent's
+#     per-node memory ceiling needs to climb in proportion to
+#     the per-node pod count (kubeletstats apiserver-cache +
+#     hostmetrics buffer fit comfortably in 256Mi locally, but
+#     a node with 50 pods will push that envelope). The
+#     metrics-cluster-agent's memory ceiling needs to climb in
+#     proportion to the apiserver watch state (more pods +
+#     more namespaces + more workloads = more watch objects).
+#     Tune against observed steady-state usage on the real
+#     box.
+#   - Obs prometheus PVC and retention re-sizing alongside
+#     the higher cluster-metric volume. The local prom is 5Gi
+#     at 7d retention (chart defaults from slice 17); slice 21
+#     lands the first real cluster-metric series and that
+#     envelope is comfortable for a single-node cluster's
+#     ~3,000 active series. A multi-node Hetzner cluster with
+#     more pods generates 10-50x the series count — the
+#     Hetzner slice will re-size the PVC and decide on
+#     `server.retention` before any cutover. The local-mirror
+#     posture is intentionally NOT inherited here.
+#
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

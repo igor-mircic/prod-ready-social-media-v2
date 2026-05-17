@@ -172,10 +172,28 @@ data:
       # receiver` flag added in `infra/k8s-obs/base/prometheus/
       # values.yaml` lights up `POST /api/v1/write` on the
       # chart-default `prometheus-server` Service.
+      #
+      # `resource_to_telemetry_conversion.enabled: true` was added
+      # in slice 21 (add-k3s-cluster-metrics). Without it, the
+      # exporter drops OTel resource attributes (k8s.node.name,
+      # k8s.namespace.name, k8s.pod.name, host.name, etc.) on the
+      # floor and emits unlabeled series — the cluster-overview
+      # dashboard's per-node / per-namespace / per-pod queries
+      # have nothing to group by. Setting `enabled: true` promotes
+      # every resource attribute to a prometheus label
+      # (dotted-to-underscored: `k8s.node.name` → `k8s_node_name`).
+      # This is safe for cardinality: the resource attributes are
+      # the SAME ones the OTel receivers already emit (one
+      # k8s.node.name per node, one k8s.pod.name per pod), and
+      # they are what operators expect to see in the label set
+      # on the prometheus side. Same posture the kube-prometheus
+      # exporter takes when re-mapping kube-state-metrics output.
       prometheusremotewrite/in-cluster:
         endpoint: http://prometheus-server.observability.svc.cluster.local/api/v1/write
         tls:
           insecure: true
+        resource_to_telemetry_conversion:
+          enabled: true
 
     service:
       extensions: [health_check]

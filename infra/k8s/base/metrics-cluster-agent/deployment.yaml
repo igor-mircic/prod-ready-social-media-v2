@@ -1,0 +1,83 @@
+# metrics-cluster-agent Deployment — slice 21
+# (add-k3s-cluster-metrics). Singleton (`replicas: 1`); the
+# k8s_cluster receiver watches the apiserver and multiple
+# replicas would duplicate every cluster-state metric
+# (design.md Decision 6). On a multi-node Hetzner cluster the
+# right answer is `replicas: 2` + `k8s_leader_elector`
+# extension — flagged in the Hetzner overlay stub.
+#
+# No `tolerations:` beyond the cluster default and no
+# `nodeSelector:` — the receiver doesn't care which node it
+# lands on (design.md Open Question 3). On a single-node-local
+# cluster the only node carries the control-plane taint and
+# this Deployment would not schedule; but slice 21 inherits
+# the slice-20 design where the lone node has been
+# `kubectl taint nodes ... -` un-tainted at the install-k3s
+# layer (see `infra/lima/install-k3s.sh`). On Hetzner where
+# untainted worker nodes exist this Deployment lands on any
+# of them.
+#
+# Image is referenced by name without an inline tag; the
+# directory's `kustomization.yaml` `images:` directive resolves
+# the tag (otel/opentelemetry-collector-contrib:0.111.0, same
+# pin as the gateway, the log-agent, the metrics-agent, and
+# the obs cluster collector).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-cluster-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: metrics-cluster-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: metrics-cluster-agent
+    spec:
+      serviceAccountName: metrics-cluster-agent
+      containers:
+        - name: metrics-cluster-agent
+          image: otel/opentelemetry-collector-contrib
+          args:
+            - --config=/etc/otelcol-contrib/config.yaml
+          ports:
+            - name: healthcheck
+              containerPort: 13133
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: healthcheck
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # Same envelope as the metrics-agent and the
+              # slice-20 log-agent (design.md Decision 8). One
+              # envelope across agents is one less thing for
+              # operators to learn.
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: metrics-cluster-agent-config
+            items:
+              - key: config.yaml
+                path: config.yaml

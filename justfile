@@ -280,6 +280,46 @@ log-agent-rollout:
     kubectl rollout restart daemonset/log-agent -n {{PG_NAMESPACE}}
     kubectl rollout status daemonset/log-agent -n {{PG_NAMESPACE}} --timeout=120s
 
+# === Slice 21 (add-k3s-cluster-metrics) — node-local
+# metrics-agent DaemonSet + singleton metrics-cluster-agent
+# Deployment verbs. ===
+#
+# Both pods live in the `social` namespace. The metrics-agent
+# DaemonSet runs one pod per node, scraping kubeletstats +
+# hostmetrics receivers. The metrics-cluster-agent Deployment
+# is a singleton running the k8s_cluster receiver against the
+# apiserver. Both ship OTLP/gRPC plaintext to the gateway
+# collector Service (`collector.social.svc.cluster.local:4317`).
+# The gateway then carries them through the slice-19 mTLS
+# envelope to the obs cluster's prometheus via the slice-18c
+# remote-write path. See README "Cluster metrics".
+#
+# Four daily verbs — both workloads ship in the base overlay
+# so `just k8s-apply` already stands them up.
+
+# Tail metrics-agent pod logs (follow). Label-scoped so this
+# picks up every replica on multi-node clusters.
+metrics-agent-logs:
+    kubectl logs -n {{PG_NAMESPACE}} -l app.kubernetes.io/name=metrics-agent --tail=200 -f
+
+# Roll the metrics-agent DaemonSet to pick up ConfigMap edits
+# (kubelet does NOT auto-restart pods when a mounted ConfigMap's
+# data changes). Blocks on rollout-status (60s — DaemonSet
+# rollout on a single-node cluster is fast).
+metrics-agent-rollout:
+    kubectl rollout restart daemonset/metrics-agent -n {{PG_NAMESPACE}}
+    kubectl rollout status daemonset/metrics-agent -n {{PG_NAMESPACE}} --timeout=60s
+
+# Tail metrics-cluster-agent pod logs (follow).
+metrics-cluster-agent-logs:
+    kubectl logs -n {{PG_NAMESPACE}} -l app.kubernetes.io/name=metrics-cluster-agent --tail=200 -f
+
+# Roll the metrics-cluster-agent Deployment to pick up ConfigMap
+# edits. Blocks on rollout-status (60s).
+metrics-cluster-agent-rollout:
+    kubectl rollout restart deploy/metrics-cluster-agent -n {{PG_NAMESPACE}}
+    kubectl rollout status deploy/metrics-cluster-agent -n {{PG_NAMESPACE}} --timeout=60s
+
 # === Slice 17 (add-local-k3s-obs-cluster) — observability cluster
 # verbs. ===
 #
