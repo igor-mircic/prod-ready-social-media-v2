@@ -78,12 +78,6 @@
 
 **Migration**: All 17 markdown files move from `infra/observability/runbooks/*.md` to `infra/runbooks/*.md` byte-identically. The `runbook_url` annotation on every alerting rule in `infra/k8s-obs/base/prometheus/rules/*.yml` is updated to point at the new path (path component changes from `infra/observability/runbooks/` to `infra/runbooks/`; the GitHub host and `main` branch reference stay). Click-through from alertmanager / grafana to the runbook URL remains valid post-merge.
 
-### Requirement: CI workflow disables OTLP network exporters for the OpenTelemetry Java agent
-
-**Reason**: This requirement does not change in behavior with slice 22b; it is listed here only to flag that the slice does NOT touch CI's agent-disabling step. (No-op removal — kept inline as a cross-reference to make explicit that other slice-22b CI changes (promtool path repoint, diff-guard removal) do not touch this surface.)
-
-**Migration**: Not applicable — this requirement remains in the `ci` capability unchanged.
-
 ## MODIFIED Requirements
 
 ### Requirement: End-to-end test proves the FE → Collector → Prometheus metrics pipeline
