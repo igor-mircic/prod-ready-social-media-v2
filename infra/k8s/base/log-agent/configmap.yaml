@@ -1,0 +1,224 @@
+# log-agent collector pipeline — slice 20
+# (add-k3s-pod-log-shipping). One signal type only: logs.
+#
+# Pipeline shape:
+#   filelog (CRI envelope strip -> router JSON vs text
+#            -> json_parser on JSON branch promoting timestamp,
+#               level, message, trace_id, span_id to record fields)
+#     -> k8sattributes (auth_type: serviceAccount; extracts
+#                       k8s.namespace.name, k8s.pod.name,
+#                       k8s.pod.uid, k8s.container.name,
+#                       k8s.node.name, label app.kubernetes.io/name)
+#     -> batch
+#     -> otlp -> collector.social.svc.cluster.local:4317 (gRPC,
+#                                                          plaintext,
+#                                                          in-cluster)
+#
+# The gateway collector's logs pipeline then carries this through
+# the slice-19 mTLS envelope to the obs cluster. The agent has
+# no cert material — single security boundary at the gateway.
+#
+# JSON-vs-text detection (design.md Decision 3):
+#   - Backend pods emit structured JSON via logback (slice-2).
+#   - Postgres, nginx, agent-self produce plain text.
+#   - The `router` operator's predicate (`body matches "^\\s*\\{"`)
+#     routes JSON-shaped bodies through the json_parser; non-JSON
+#     bodies fall through to the default branch as raw text.
+#   - `on_error: send_quiet` on the json_parser falls back to raw
+#     body if a mis-detected line trips the parser; the line lands
+#     as text rather than being dropped.
+#
+# Trace correlation field names (design.md Decision 3, Open Q 3):
+#   - Backend logback MDC emits `trace.id` / `span.id` (dotted,
+#     OTel convention).
+#   - Grafana's trace-to-logs correlation expects underscored
+#     `trace_id` / `span_id`.
+#   - The json_parser's `parse_from` projection writes the
+#     underscored form to the log record directly.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: log-agent-config
+data:
+  config.yaml: |
+    receivers:
+      filelog:
+        # Scope: pods in the `social` namespace only (the
+        # agent's own pods also run in `social`, so they are
+        # included by this same glob and the shipper observes
+        # itself). Widening the glob is a future-slice concern
+        # gated on Loki retention sizing — see design.md
+        # Decision 5.
+        include:
+          - /var/log/pods/social_*/*/*.log
+        # Fresh pod re-reads from the start of every open file.
+        # Cursor persistence is an open question (design.md Open
+        # Questions #1) deferred for slice 20 — pod restarts in
+        # local dev are rare enough to accept the duplication.
+        start_at: beginning
+        # The `container` operator below parses k8s metadata out of
+        # the file path (`/var/log/pods/<ns>_<pod>_<uid>/<container>/<restart>.log`),
+        # but it reads that path from the `log.file.path` attribute
+        # which the filelog receiver populates only when
+        # `include_file_path: true`. Without this flag the operator
+        # logs `type '<nil>' cannot be parsed as log path field` on
+        # every line and the k8sattributes processor downstream has
+        # nothing to enrich against.
+        include_file_path: true
+        operators:
+          # 1. CRI envelope strip. k3s uses containerd, so every
+          #    line on disk is the CRI text format:
+          #      <RFC3339Nano timestamp> <stream> <tag> <body>
+          #    The `container` operator detects and strips it,
+          #    promoting timestamp -> record timestamp and body
+          #    -> record body. Equivalent to the legacy
+          #    `recombine + regex` pair but ships in the
+          #    contrib collector as a first-class operator.
+          - type: container
+            id: container-parser
+
+          # 2. Route on whether the body looks JSON-shaped.
+          #    Predicate: body starts with `{` after optional
+          #    whitespace. Backend (logback JSON) hits the
+          #    `json` branch; postgres, nginx, and the agent
+          #    itself fall through to the default `text` branch
+          #    as raw text.
+          - type: router
+            id: body-shape-router
+            routes:
+              - expr: 'body matches "^\\s*\\{"'
+                output: json-parser
+            default: noop-text
+
+          # 3a. JSON branch — parse the body, promoting inner
+          #     fields to log-record fields. The backend uses
+          #     Spring Boot's structured logging in ECS format
+          #     (application.yaml `logging.structured.format`),
+          #     so each line is shaped like:
+          #       { "@timestamp": "...", "log": {"level": "...", "logger": "..."},
+          #         "message": "...", "trace": {"id": "..."}, "span": {"id": "..."} }
+          #     `parse_from: body` reads the body as JSON.
+          #     `on_error: send_quiet` means a malformed line
+          #     falls through to the next operator with the
+          #     raw body intact — the record still ships, just
+          #     as text. The nanosecond timestamp layout
+          #     tolerates the ECS encoder's full precision.
+          - type: json_parser
+            id: json-parser
+            on_error: send_quiet
+            parse_from: body
+            timestamp:
+              parse_from: attributes."@timestamp"
+              layout_type: gotime
+              layout: "2006-01-02T15:04:05.999999999Z07:00"
+            severity:
+              parse_from: attributes.log.level
+
+          # 3b. Move the parsed `message` field into the record
+          #     body so Loki shows the message text in the log
+          #     panel (not the full JSON envelope). `send_quiet`
+          #     means lines without a `message` field skip the
+          #     move silently.
+          - type: move
+            id: json-message-to-body
+            on_error: send_quiet
+            from: attributes.message
+            to: body
+
+          # 3c. Promote nested ECS `trace.id` / `span.id` to the
+          #     flat underscored form Grafana's trace-to-logs
+          #     correlation expects. The ECS encoder emits these
+          #     as nested objects (`{"trace":{"id":"..."}}`),
+          #     even though the OTel Java agent's MDC adapter
+          #     writes the dotted keys to MDC — the encoder
+          #     re-shapes them on output. `send_quiet` keeps
+          #     lines without trace context flowing.
+          - type: move
+            id: nested-trace-id-rename
+            on_error: send_quiet
+            from: attributes.trace.id
+            to: attributes.trace_id
+          - type: move
+            id: nested-span-id-rename
+            on_error: send_quiet
+            from: attributes.span.id
+            to: attributes.span_id
+
+          # 3d. Fan-in: send the JSON branch to the end of the
+          #     chain so both branches converge.
+          - type: noop
+            id: noop-json-tail
+            output: end
+
+          # 4. Default branch — raw text. The CRI strip in step
+          #    1 already populated `body` with the inner text;
+          #    nothing more to do.
+          - type: noop
+            id: noop-text
+            output: end
+
+          # 5. Final converge point referenced by both branches
+          #    above. A trailing `noop` operator keeps the
+          #    chain end explicit.
+          - type: noop
+            id: end
+
+    processors:
+      # Resolve each record's pod UID (read from the file path
+      # /var/log/pods/<ns>_<pod>_<uid>/.../*.log by the filelog
+      # receiver) against the apiserver. The `serviceAccount`
+      # auth mode reuses the mounted projected token; the
+      # ClusterRole declared in rbac.yaml grants the read verbs.
+      k8sattributes:
+        auth_type: serviceAccount
+        extract:
+          metadata:
+            - k8s.namespace.name
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.container.name
+            - k8s.node.name
+          labels:
+            - tag_name: app.kubernetes.io/name
+              key: app.kubernetes.io/name
+              from: pod
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+
+      batch: {}
+
+    extensions:
+      # Bind explicitly to 0.0.0.0 — the contrib collector's
+      # health_check extension defaults to `localhost:13133`,
+      # which the kubelet probe cannot reach from outside the
+      # pod's network namespace. Binding all interfaces is safe:
+      # the port is not on any Service, so only the pod-local
+      # kubelet probe ever reaches it.
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    exporters:
+      # In-cluster plaintext OTLP/gRPC to the gateway collector.
+      # The gateway then wraps the cross-cluster hop in mTLS
+      # (slice 19) — see infra/k8s/base/collector/configmap.yaml
+      # `otlphttp/obs-cluster-logs`. The agent intentionally has
+      # no cert material; a single security boundary at the
+      # gateway is the design (design.md Decision 2).
+      otlp:
+        endpoint: collector.social.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        # Exactly one pipeline — no traces, no metrics. Slice 21
+        # will add a separate agent (or a sibling pipeline) for
+        # cluster metrics; mixing them here would tangle the
+        # signal scopes.
+        logs:
+          receivers: [filelog]
+          processors: [k8sattributes, batch]
+          exporters: [otlp]

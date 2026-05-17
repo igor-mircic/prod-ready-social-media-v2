@@ -455,7 +455,7 @@ property is never broken.
 3. **slice 19** `add-cross-cluster-mtls` — self-signed CA + TLS
    certs in both clusters; cross-cluster OTLP becomes mTLS only.
 4. **slice 20** `add-k3s-pod-log-shipping` — DaemonSet ships pod
-   logs over OTLP to the obs cluster's loki.
+   logs over OTLP to the obs cluster's loki. (done)
 5. **slice 21** `add-k3s-cluster-metrics` — kubelet + cAdvisor +
    node-exporter scrape via the app collector; cluster dashboards
    in obs grafana.
@@ -1009,6 +1009,96 @@ In Grafana:
 The host directory (`./infra/observability/logs/`) is committed (with a
 `.gitkeep` placeholder) so the Collector's bind-mount target exists on a
 fresh clone; the `*.json` content in that directory is gitignored.
+
+### k3s pod log shipping
+
+Slice 20 (`add-k3s-pod-log-shipping`) closes the second of three signal
+gaps on the obs cluster — backend pod logs join the cross-cluster
+transport spine alongside browser FE error logs (slice 18c) and backend
+traces (slices 18a/b). A new `log-agent` DaemonSet under
+`infra/k8s/base/log-agent/` runs one OpenTelemetry Collector pod per
+node, tails `/var/log/pods/social_*/*/*.log` (the kubelet's CRI log
+directory, scoped to the `social` namespace), JSON-parses backend stdout
+at the agent, enriches every record with k8s attributes
+(`k8s.namespace.name`, `k8s.pod.name`, `k8s.container.name`,
+`k8s.node.name`, plus the workload-level `app.kubernetes.io/name`
+label), and ships the result OTLP/gRPC plaintext to the in-cluster
+gateway collector. The gateway then carries it through the slice-19
+mTLS envelope to the obs cluster's Loki — single cross-cluster security
+boundary, single redaction pass.
+
+```
+  ┌───────────────────────────────────────────────────┐
+  │ app cluster (lima-social)                         │
+  │                                                   │
+  │  /var/log/pods/social_backend-*/backend/0.log     │
+  │            │                                      │
+  │            ▼                                      │
+  │   ┌──────────────────┐                            │
+  │   │ log-agent        │  filelog → CRI strip       │
+  │   │ DaemonSet        │  → router (JSON vs text)   │
+  │   │                  │  → json_parser → severity  │
+  │   │                  │  → k8sattributes → batch   │
+  │   └────────┬─────────┘                            │
+  │            │ OTLP/gRPC :4317 (plaintext, in-cluster)
+  │            ▼                                      │
+  │   ┌──────────────────┐                            │
+  │   │ gateway          │  batch → redact-path-ids   │
+  │   │ collector        │  → filter/exclude-obs-self │
+  │   │ (logs pipeline)  │  → dual-write              │
+  │   └────────┬─────────┘                            │
+  │            │ mTLS (slice 19)                      │
+  └────────────┼──────────────────────────────────────┘
+               ▼
+       host.lima.internal:14318 → obs cluster Loki → obs grafana
+```
+
+Apply behavior — the DaemonSet ships with the base overlay, so
+`just k8s-apply` rolls it out the same way it rolls out the backend,
+frontend, postgres, and gateway collector. No separate verb needed.
+
+End-to-end loop on the local mirror:
+
+```sh
+just vm-up           # app cluster (no-op if running)
+just obs-up          # obs cluster (no-op if running)
+just k8s-apply       # rolls out log-agent + the renamed gateway filter
+just backend-forward # in a side terminal; port-forward backend :8080 -> :18080
+curl http://localhost:18080/actuator/health   # generates an INFO log line
+just obs-grafana     # in a side terminal; obs grafana on :3001
+# In obs grafana → Explore → Loki, query:
+#   {k8s_namespace_name="social", k8s_container_name="backend"}
+# The line from `kubectl logs deploy/backend -n social --tail=1` appears
+# within ~30 seconds, carrying trace_id / span_id / k8s_pod_name /
+# k8s_node_name as label dimensions.
+```
+
+Trace-to-logs correlation lights up automatically: any Loki entry with
+a `trace_id` field renders a "View trace" link that navigates to the
+matching Tempo span tree. The MDC normalization happens at the agent
+(dotted `trace.id` / `span.id` → underscored `trace_id` / `span_id`)
+because Grafana's correlation expects the underscored form.
+
+Daily verbs:
+
+- `just log-agent-logs` — tail the DaemonSet's pods (label-scoped, so
+  it picks up every replica on future multi-node clusters; follows).
+- `just log-agent-rollout` — rolling restart against the DaemonSet after
+  a ConfigMap edit; blocks on rollout-status (kubelet does NOT auto-
+  restart pods when a mounted ConfigMap's data changes).
+
+**Non-goals (slice 20 deliberately does not ship):**
+
+- Tailing logs from `kube-system` or `default` namespaces — the
+  filelog `include:` glob is `social_*` only. Widening blows up the
+  local Loki PVC (5Gi chart default) on sustained local-dev sessions
+  and is gated on a retention / PVC sizing review the Hetzner slice
+  will weigh.
+- Audit logs, container runtime logs, kernel logs — application pod
+  logs only.
+- Log-based alerting — defaults from the slice-17 Loki chart values
+  stand; alerting is a future slice's concern.
+- Retention or index-cardinality tuning — chart defaults stand.
 
 ### Frontend tracing
 

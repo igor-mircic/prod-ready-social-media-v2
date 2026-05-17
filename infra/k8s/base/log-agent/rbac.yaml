@@ -1,0 +1,51 @@
+# Slice 20 (add-k3s-pod-log-shipping). RBAC for the log-agent
+# ServiceAccount declared in serviceaccount.yaml.
+#
+# The k8sattributes processor enriches each log record with the
+# attributes of the pod that produced it. To do that it resolves
+# the pod UID (read from /var/log/pods/<ns>_<pod>_<uid>/...) against
+# the apiserver — requiring `get`/`list`/`watch` on `pods`,
+# `namespaces`, and `replicasets`. The processor documents these
+# three kinds as the minimum extraction set.
+#
+# Cluster-scoped (ClusterRole + ClusterRoleBinding), not namespace-
+# scoped (Role + RoleBinding), because the processor doesn't know
+# the filelog `include:` glob narrows the read surface — it just
+# resolves UIDs against the apiserver. Restricting to namespace
+# scope would leave records from any pod outside `social`
+# silently un-enriched even though the processor is structurally
+# capable of producing them. Verbs are read-only on three resource
+# kinds; no write/admin/wildcard.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: log-agent
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups: ["apps"]
+    resources:
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: log-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: log-agent
+subjects:
+  - kind: ServiceAccount
+    name: log-agent
+    namespace: social

@@ -8,7 +8,7 @@
 #     -> traces:  transform/redact-path-ids
 #                 -> otlp/compose-relay      (host.lima.internal:4317,  plaintext)
 #                 -> otlp/obs-cluster        (host.lima.internal:14317, mTLS, slice 19)
-#     -> logs:    transform/redact-path-ids, filter/frontend_only
+#     -> logs:    transform/redact-path-ids, filter/exclude_observability_self
 #                 -> otlphttp/compose-relay-logs  (http://host.lima.internal:4318,   plaintext)
 #                 -> otlphttp/obs-cluster-logs    (https://host.lima.internal:14318, mTLS, slice 19)
 #     -> metrics: (batch only; FE web-vitals have no PII / no path data)
@@ -109,16 +109,27 @@ data:
               - replace_pattern(attributes["url.path"], "/[0-9a-f]{8,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
               - replace_pattern(attributes["url.path"], "/[0-9]{4,}(/|$)", "/{id}$$1") where attributes["url.path"] != nil
 
-      # Slice 18c FE-only gate. The OTLP/HTTP receiver carries logs from
-      # any source that POSTs to `/v1/logs`; today only the frontend SDK
-      # does (via the FE pod's nginx `/v1/` proxy), but the explicit
-      # drop here makes the boundary auditable and prevents accidental
-      # cross-pollination if a future slice adds a BE-via-OTLP path.
-      # Mirrors the compose collector's slice-7 filter exactly.
-      filter/frontend_only:
+      # Slice 20 (add-k3s-pod-log-shipping) rescope: the slice-18c
+      # `filter/frontend_only` gate is replaced by a feedback-loop guard.
+      # Today the only source dialing this collector's logs pipeline is
+      # the FE SDK (via nginx /v1/) and the new node-local log-agent
+      # DaemonSet (slice 20) — both legitimately carry non-frontend
+      # records (backend pod stdout, log-agent self-logs). A frontend-
+      # only gate would drop everything the agent ships.
+      #
+      # The new filter is defence-in-depth against a future slice
+      # widening the log-agent's `include:` glob beyond `social_*/` to
+      # cover the obs namespace's own pods on the same cluster. That
+      # would produce: agent reads obs pod log -> gateway -> obs cluster
+      # -> obs collector logs -> obs pod log file -> agent reads it
+      # again -> ... a tight feedback loop. Today no obs namespace
+      # exists on the app cluster, so this filter is a no-op in
+      # practice; the OTTL line costs nanoseconds per record and keeps
+      # the guard explicit in the config grep.
+      filter/exclude_observability_self:
         logs:
           log_record:
-            - 'resource.attributes["service.name"] != "frontend"'
+            - 'resource.attributes["k8s.namespace.name"] == "observability"'
 
     extensions:
       # Bind explicitly to 0.0.0.0 — the contrib collector's
@@ -213,10 +224,11 @@ data:
           exporters: [otlp/compose-relay, otlp/obs-cluster]
         logs:
           receivers: [otlp]
-          # `filter/frontend_only` runs LAST so the redaction pass
-          # observes records as the SDK emits them; the drop happens
-          # only after the auditable redaction has run.
-          processors: [batch, transform/redact-path-ids, filter/frontend_only]
+          # `filter/exclude_observability_self` runs LAST so the
+          # redaction pass observes records as the SDK / log-agent
+          # emits them; the drop happens only after the auditable
+          # redaction has run.
+          processors: [batch, transform/redact-path-ids, filter/exclude_observability_self]
           exporters: [otlphttp/compose-relay-logs, otlphttp/obs-cluster-logs]
         metrics:
           receivers: [otlp]
