@@ -1,28 +1,69 @@
 # prometheus-community/alertmanager chart values for slice 17
-# (add-local-k3s-obs-cluster). Chart pin: 1.36.0 (app v0.32.1).
+# (add-local-k3s-obs-cluster), updated by slice 22a
+# (migrate-obs-content). Chart pin: 1.36.0 (app v0.32.1).
 #
-# Minimal "drop everything" configuration. No real alerting in this
-# slice — the receivers wire up in slice 22 (retire-compose-
-# observability) when the compose-side alertmanager rules migrate
-# over. Until then, the alertmanager is stood up empty so the API
-# is reachable (the spec asserts `/-/healthy` returns 200) without
-# any alert ever firing into an unconfigured receiver.
+# Slice 22a migrated the receiver tree from compose
+# (infra/observability/alertmanager/alertmanager.yml). Slice 22b
+# (retire-compose-observability) retires the compose copy and
+# this becomes the only routing tree in the project.
+#
+# Routing tree (severity-keyed): every firing carries a
+# `severity` label pinned by the migrated rule files. The
+# top-level `route:` dispatches:
+#   severity="page"   → page-webhook   (POST http://webhook-sink:8080/page)
+#   severity="ticket" → ticket-webhook (POST http://webhook-sink:8080/ticket)
+# Anything unlabelled lands on `default`, which is intentionally
+# empty (Alertmanager requires the top-level route to name a
+# receiver, but no rule in the migrated files lacks a severity
+# label today).
+#
+# Inhibition: while `BackendDown` is firing, every alert
+# carrying any `slo` label is suppressed (`equal: []` so
+# BackendDown anywhere inhibits all SLO alerts anywhere — this
+# slice has a single backend target).
+#
+# Webhook receivers carry `send_resolved: true` so the sink
+# observes the full firing → resolved state machine.
 
 persistence:
   enabled: true
   size: 1Gi
   storageClass: local-path
 
-# Minimal config: one receiver named `null` that drops everything;
-# the route sends every alert to it. Effectively a black hole.
-# Slice 22 replaces this with the real receiver layout (webhook
-# sink, alert ratelimits, inhibit rules) migrated from
-# infra/observability/alertmanager/alertmanager.yml.
 config:
   route:
-    receiver: 'null'
+    receiver: 'default'
+    group_by: ['alertname', 'slo']
+    group_wait: 10s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - matchers:
+          - severity="page"
+        receiver: 'page-webhook'
+        continue: false
+      - matchers:
+          - severity="ticket"
+        receiver: 'ticket-webhook'
+        continue: false
+
   receivers:
-  - name: 'null'
+    - name: 'default'
+    - name: 'page-webhook'
+      webhook_configs:
+        - url: 'http://webhook-sink.observability.svc.cluster.local:8080/page'
+          send_resolved: true
+    - name: 'ticket-webhook'
+      webhook_configs:
+        - url: 'http://webhook-sink.observability.svc.cluster.local:8080/ticket'
+          send_resolved: true
+
+  inhibit_rules:
+    - source_matchers:
+        - alertname="BackendDown"
+      target_matchers:
+        - slo=~".+"
+      equal: []
 
 resources:
   requests:

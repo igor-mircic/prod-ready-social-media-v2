@@ -23,19 +23,32 @@ helmCharts:
 resources:
 - ./secret.yaml
 
-# Slice 21 (add-k3s-cluster-metrics): wrap every dashboard JSON
-# under ./dashboards/ in a ConfigMap whose name the grafana
-# chart's `dashboardsConfigMaps.default` setting in values.yaml
-# references. `disableNameSuffixHash: true` keeps the name
-# stable across re-renders so the chart's
+# Slice 21 (add-k3s-cluster-metrics) + slice 22a (migrate-obs-content):
+# wrap every dashboard JSON under ./dashboards/ in a ConfigMap
+# whose name the grafana chart's `dashboardsConfigMaps.default`
+# setting in values.yaml references. `disableNameSuffixHash: true`
+# keeps the name stable across re-renders so the chart's
 # `dashboardsConfigMaps:` reference resolves; dashboard edits
 # are picked up via `kubectl rollout restart deploy/grafana`
 # (kubelet does NOT auto-restart pods when a mounted
 # ConfigMap's data changes — same posture every other slice's
 # collector ConfigMaps take).
+#
+# Slice 22a added `backend-overview`, `frontend-overview`,
+# `database-overview` (byte-similar copies of the compose-side
+# dashboards under `infra/observability/grafana/dashboards/`).
+# Datasource UIDs already match (`prometheus` on both sides since
+# slice 18b) and the compose dashboards carry no `host.docker.internal`
+# `instance=...` selectors, so the JSON files are byte-identical
+# copies. The `infrastructure-overview` dashboard is NOT migrated —
+# slice 21's `cluster-overview` already covers the same operator
+# role under k8s-shaped families.
 configMapGenerator:
   - name: grafana-dashboards-default
     files:
       - dashboards/cluster-overview.json
+      - dashboards/backend-overview.json
+      - dashboards/frontend-overview.json
+      - dashboards/database-overview.json
     options:
       disableNameSuffixHash: true

@@ -21,3 +21,32 @@ helmCharts:
   releaseName: prometheus
   namespace: observability
   valuesFile: values.yaml
+
+# Slice 22a (migrate-obs-content): wrap every rule `.yml` file
+# under ./rules/ in a `prometheus-extra-rules` ConfigMap, then
+# mount it into the prometheus pod at `/etc/prometheus-extra-rules/`
+# via values.yaml's `server.extraConfigmapMounts:`. The chart's
+# `serverFiles.prometheus.yml.rule_files:` is extended in the
+# same values file to APPEND `/etc/prometheus-extra-rules/*.yml`
+# so prometheus loads the migrated groups at startup alongside
+# the chart-default `/etc/config/{recording,alerting}_rules.yml`.
+#
+# `disableNameSuffixHash: true` keeps the ConfigMap name stable
+# across re-renders so the values.yaml `extraConfigmapMounts.configMap`
+# reference resolves to the same name on every apply. Kubelet
+# does NOT auto-restart pods when a mounted ConfigMap's data
+# changes; rule edits are picked up via
+# `kubectl --context social-obs -n observability rollout
+# restart sts/prometheus-server` — same posture every other
+# slice's chart-mounted ConfigMaps take (slice 21 grafana
+# dashboardsConfigMaps).
+configMapGenerator:
+  - name: prometheus-extra-rules
+    files:
+      - rules/slo-recording.yml
+      - rules/slo-alerting.yml
+      - rules/fe-slo-recording.yml
+      - rules/fe-slo-alerting.yml
+      - rules/database-alerts.yml
+    options:
+      disableNameSuffixHash: true

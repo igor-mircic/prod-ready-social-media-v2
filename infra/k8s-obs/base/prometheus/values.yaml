@@ -60,6 +60,50 @@ server:
       memory: 1Gi
       cpu: 1000m
 
+  # Slice 22a (migrate-obs-content): mount the kustomize-generated
+  # `prometheus-extra-rules` ConfigMap (sibling kustomization.yaml's
+  # configMapGenerator) at `/etc/prometheus-extra-rules/`. The chart
+  # appends `mountPath` to the prometheus container's volumeMounts
+  # and `configMap.name` to the pod's volumes. Read-only by chart
+  # default.
+  extraConfigmapMounts:
+    - name: prometheus-extra-rules
+      mountPath: /etc/prometheus-extra-rules
+      subPath: ""
+      configMap: prometheus-extra-rules
+      readOnly: true
+
+  # Slice 22a (migrate-obs-content): the slice-17 obs prometheus
+  # was stood up with no alertmanager target — `rule_files:` could
+  # be set, but firings had no receiver. The migrated routing tree
+  # in `../alertmanager/values.yaml` is now the receiver of record;
+  # wire it as a single static-config target. The slice-19 mTLS
+  # envelope is cross-cluster only; prometheus → alertmanager stays
+  # plaintext in-cluster on `:9093`.
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager.observability.svc.cluster.local:9093
+
+# Slice 22a (migrate-obs-content): override the chart-default
+# `rule_files:` list to APPEND the migrated rule files mount.
+# The chart's default values.yaml ships
+# `/etc/config/recording_rules.yml` and `/etc/config/alerting_rules.yml`
+# (both empty by default — the chart writes them from
+# `serverFiles.recording_rules.yml` / `alerting_rules.yml`,
+# which we leave unset). PRESERVE those so a future slice that
+# wants to add inline rules through serverFiles still works,
+# then append `/etc/prometheus-extra-rules/*.yml` (the slice-22a
+# mount). Helm's deep-merge replaces the entire list when both
+# sides declare `rule_files:`, so the chart defaults must be
+# restated explicitly.
+serverFiles:
+  prometheus.yml:
+    rule_files:
+      - /etc/config/recording_rules.yml
+      - /etc/config/alerting_rules.yml
+      - /etc/prometheus-extra-rules/*.yml
+
 # Alertmanager is its own top-level chart in
 # infra/k8s-obs/base/alertmanager/. The prometheus chart's bundled
 # alertmanager subchart is explicitly disabled to avoid two

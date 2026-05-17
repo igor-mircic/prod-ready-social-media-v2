@@ -1,0 +1,19 @@
+# webhook-sink workload (slice 22a, migrate-obs-content).
+# Plain-resource Kustomize component — Deployment + Service in
+# the observability namespace.
+#
+# Common label applied across every resource — `kubectl delete
+# -l app.kubernetes.io/name=webhook-sink -n observability`
+# cleans the workload, same shape as the slice-15 backend +
+# slice-16 frontend delete recipes.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/name: webhook-sink
+
+resources:
+  - ./deployment.yaml
+  - ./service.yaml
