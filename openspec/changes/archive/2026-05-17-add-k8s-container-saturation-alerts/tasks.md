@@ -44,7 +44,7 @@
 
 ## 6. OpenSpec validation, branch, commit
 
-- [ ] 6.1 `openspec validate add-k8s-container-saturation-alerts --strict` — exit 0. (Run at proposal time, before implementation begins.)
-- [ ] 6.2 Branch from `main` named `add-k8s-container-saturation-alerts` and commit the proposal + design + tasks + specs delta (proposal-only commit per `feedback_branch_commit_proposal_first.md`).
-- [ ] 6.3 Implementation commit after sections 1–5 complete. PR against `main`. Per `feedback_openspec_apply_autonomous_to_merge.md`: drive commit → push → PR → watch-CI → archive → re-watch CI without prompting; ask only at merge time.
-- [ ] 6.4 After PR is green: `openspec archive add-k8s-container-saturation-alerts --yes` to fold the spec delta into the canonical `openspec/specs/observability-cluster/spec.md`. Re-watch CI on the archive commit.
+- [x] 6.1 `openspec validate add-k8s-container-saturation-alerts --strict` — exit 0. (Passed at proposal time, again before implementation commit, and again after the spec-delta header fix.)
+- [x] 6.2 Branch from `main` named `add-k8s-container-saturation-alerts` and commit the proposal + design + tasks + specs delta (proposal-only commit per `feedback_branch_commit_proposal_first.md`). (Commit `f5ac00e`.)
+- [x] 6.3 Implementation commit after sections 1–5 complete. PR against `main`. Per `feedback_openspec_apply_autonomous_to_merge.md`: drive commit → push → PR → watch-CI → archive → re-watch CI without prompting; ask only at merge time. (Commit `d0c6aa9`, PR #56, CI run 26003498648 green in 4m15s.)
+- [x] 6.4 After PR is green: `openspec archive add-k8s-container-saturation-alerts --yes` to fold the spec delta into the canonical `openspec/specs/observability-cluster/spec.md`. Re-watch CI on the archive commit. (Archive failed first attempt because the delta's second `## MODIFIED Requirements` header named a requirement not present in canonical specs — corrected to ADDED. Archive commit `7e08d33`, CI run 26003646215 green.)
