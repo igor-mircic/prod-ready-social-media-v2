@@ -1,0 +1,79 @@
+# Container-saturation alerts (slice `add-k8s-container-saturation-alerts`).
+#
+# Authored against the slice-21 OTel families surfaced by the `kubeletstats`
+# receiver (DaemonSet `metrics-agent`) after `prometheusremotewrite`
+# translation. Series shape:
+#   - `k8s_container_cpu_limit_utilization_ratio`     (k8s.container.cpu_limit_utilization → underscored + OpenMetrics `_ratio` suffix)
+#   - `k8s_container_memory_limit_utilization_ratio`  (same naming discipline)
+#   - `k8s_container_restarts`                        (unit-less → no suffix)
+# Labels are the OTel resource attributes after dotted-to-underscored
+# translation: `k8s_namespace_name`, `k8s_pod_name`, `k8s_container_name`,
+# `k8s_cluster_name`. The slice-21 `cluster-overview` grafana dashboard
+# renders the same families with the same labels — proof the shape works.
+#
+# Rename rationale (design.md Decision 1 + 2):
+#   - `ContainerCpuLimitNearExhaustion` replaces `ContainerCpuThrottling`.
+#     The OTel kubeletstats receiver does NOT emit CFS-throttling counters;
+#     sustained near-limit utilisation is a proxy for "the kernel will start
+#     throttling under burst" — semantically a different signal, hence the
+#     rename. Runbook documents the relationship.
+#   - `ContainerRestartingFrequently` replaces `ContainerOomKilled`. The
+#     OTel families surface restart counts but NOT termination reason; the
+#     runbook directs the operator to `kubectl describe pod` for the
+#     specific reason (OOM, liveness probe failure, panic on startup, etc).
+#
+# Alert → runbook mapping:
+#   - ContainerCpuLimitNearExhaustion → infra/runbooks/ContainerCpuLimitNearExhaustion.md
+#   - ContainerMemoryNearLimit        → infra/runbooks/ContainerMemoryNearLimit.md
+#   - ContainerRestartingFrequently   → infra/runbooks/ContainerRestartingFrequently.md
+#
+# All three carry `severity: page` and route through the slice-22a
+# alertmanager `page-webhook` receiver unchanged.
+groups:
+  - name: container-saturation
+    rules:
+      # CPU-limit utilisation proxy for CFS throttling. The kubeletstats
+      # receiver does not emit `container_cpu_cfs_throttled_periods_total`;
+      # sustained >90% of the container's CPU limit is the OTel-family
+      # signal that maps onto the same operator concern. 5m for-window
+      # filters one-off bursts; threshold revisitable after first month.
+      - alert: ContainerCpuLimitNearExhaustion
+        expr: k8s_container_cpu_limit_utilization_ratio > 0.9
+        for: 5m
+        labels:
+          severity: page
+          slo: container_cpu
+        annotations:
+          summary: "Container {{ $labels.k8s_namespace_name }}/{{ $labels.k8s_container_name }} sustained >90% of its CPU limit for 5m."
+          description: "Container `{{ $labels.k8s_namespace_name }}/{{ $labels.k8s_pod_name }}/{{ $labels.k8s_container_name }}` has held CPU utilisation above 90% of its declared CPU limit for at least 5 minutes. The kernel CFS scheduler will throttle the container on burst, inflating wall-clock latency for any work it does; raise the limit, right-size the workload, or scale out. See the runbook for the proxy-vs-throttling relationship."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerCpuLimitNearExhaustion.md"
+
+      # Memory working set vs the declared limit. Direct OTel-family
+      # equivalent of the deleted cAdvisor-keyed rule; same threshold and
+      # for-window, same paging shape — only the metric source changed.
+      - alert: ContainerMemoryNearLimit
+        expr: k8s_container_memory_limit_utilization_ratio > 0.9
+        for: 5m
+        labels:
+          severity: page
+          slo: container_memory
+        annotations:
+          summary: "Container {{ $labels.k8s_namespace_name }}/{{ $labels.k8s_container_name }} working set >90% of its memory limit for 5m."
+          description: "Container `{{ $labels.k8s_namespace_name }}/{{ $labels.k8s_pod_name }}/{{ $labels.k8s_container_name }}` has held memory working set above 90% of its declared memory limit for at least 5 minutes. The Linux OOM killer will engage soon if the trend continues; raise the cap, fix the leak, or scale out. See the runbook."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerMemoryNearLimit.md"
+
+      # Restart frequency as a reason-agnostic loop detector. `> 1` (not
+      # `> 0`) so a single startup-probe restart does not page. No
+      # `for:` window — a restart loop should page on the second restart,
+      # not after a further 5-minute confirmation delay. Runbook owns the
+      # "why did it restart?" diagnosis (kubectl describe pod / logs
+       # --previous / loki kubelet-OOM lines).
+      - alert: ContainerRestartingFrequently
+        expr: increase(k8s_container_restarts[5m]) > 1
+        labels:
+          severity: page
+          slo: container_restarts
+        annotations:
+          summary: "Container {{ $labels.k8s_namespace_name }}/{{ $labels.k8s_container_name }} restarted more than once in the last 5m."
+          description: "Container `{{ $labels.k8s_namespace_name }}/{{ $labels.k8s_pod_name }}/{{ $labels.k8s_container_name }}` has restarted more than once in the last 5 minutes — a restart loop. The OTel families do not surface the termination reason; the runbook walks the operator through `kubectl describe pod` (Last State), `kubectl logs --previous`, and the loki kubelet stream for OOM-kill log lines."
+          runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerRestartingFrequently.md"

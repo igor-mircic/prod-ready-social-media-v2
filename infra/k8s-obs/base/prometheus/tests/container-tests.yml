@@ -1,176 +1,141 @@
-# promtool test rules — historical spec for the deferred container alerts.
+# promtool test rules — executable spec for the container-saturation
+# alerts authored by `add-k8s-container-saturation-alerts`.
 #
-# Slice 22b retired the compose `container-alerts.yml` (cadvisor-shaped
-# series) without re-authoring it against the slice-21 OTel families
-# (`k8s_pod_*`, `k8s_container_*`); the follow-up slice
-# `add-k8s-container-saturation-alerts` owns the rewrite. This fixture is
-# kept in place so the follow-up slice can re-link new alerts to it
-# without rewriting the test shape from scratch. CI does NOT execute it
-# while the rules file is absent — see the `promtool test rules` step in
-# `.github/workflows/ci.yml` for the active fixture list.
+# Replaces the historical-record fixture that slice 22b carried (cAdvisor-
+# keyed assertions against deleted rules). The cAdvisor content has been
+# deleted in this slice; the file name is reused for the new fixture
+# (design.md Decision 4).
 #
-# Once the follow-up slice lands an OTel-shaped `container-alerts.yml`
-# under `infra/k8s-obs/base/prometheus/rules/`, point the `rule_files:`
-# entry at `../rules/container-alerts.yml` and re-add this file to the
-# CI invocation.
-#
-# Series-name notes:
-#   - cAdvisor v0.49+ emits `container_oom_events_total` for the OOM-kill
-#     counter; older versions only export `container_memory_failcnt`.
-#   - The `name!=""` filter is critical: cAdvisor emits both per-container
-#     series (`name="<container>"`) and per-cgroup-hierarchy series
-#     (`name=""`), and grouping/aggregation that includes the empty-name
-#     series would double-count or pollute the templated alert text.
+# Rules under test (see ../rules/container-alerts.yml):
+#   - ContainerCpuLimitNearExhaustion — k8s_container_cpu_limit_utilization_ratio > 0.9 for 5m
+#   - ContainerMemoryNearLimit        — k8s_container_memory_limit_utilization_ratio > 0.9 for 5m
+#   - ContainerRestartingFrequently   — increase(k8s_container_restarts[5m]) > 1 (no for-window)
 #
 # Coverage maps spec scenarios one-for-one:
-#   - ContainerCpuThrottling   : fires when throttled/periods ratio > 0.25
-#                                sustained 10m; no-fire when ratio stays
-#                                below 0.25.
-#   - ContainerMemoryNearLimit : fires when working_set/limit > 0.9
-#                                sustained 5m; no-fire when ratio stays
-#                                below 0.9; no-fire when limit is 0
-#                                (un-limited container; spec scenario).
-#   - ContainerOomKilled       : fires when oom_events_total increments
-#                                inside 15m; no-fire when counter is flat.
+#   - Cpu/Memory : 0.95 sustained for >5m fires; 0.85 sustained does not.
+#   - Restarts   : counter incrementing every minute (>1 over 5m) fires;
+#                  a single one-shot restart inside the window does not.
+#
+# Run locally (matches the CI invocation):
+#   docker run --rm --entrypoint promtool \
+#     -v "$PWD/infra/k8s-obs/base/prometheus:/prometheus:ro" \
+#     prom/prometheus:v2.55.1 test rules /prometheus/tests/container-tests.yml
 rule_files:
-  - container-alerts.yml
+  - ../rules/container-alerts.yml
 
 evaluation_interval: 1m
 
 tests:
   # ---------------------------------------------------------------------------
-  # 1. ContainerCpuThrottling — synthetic counters where the throttled/periods
-  # ratio is 0.30 sustained for >10m. `rate(...[5m]) / rate(...[5m]) = 0.3`
-  # crosses the 0.25 threshold; `for: 10m` requires the threshold to hold for
-  # ten minutes; eval at 17m gives the rate windows time to settle and the
-  # `for:` clause time to elapse.
-  #
-  # Series shape: counters incrementing every minute. With evaluation_interval
-  # 1m and sample step 1m, `30x20` means "value 30, repeated 20 samples"; we
-  # use `0+30x20` (= 0, 30, 60, 90, …) so the counter strictly increases
-  # and `rate()` returns 30/60 = 0.5 per second. Same for the periods counter
-  # with `0+100x20` → rate 100/60 ≈ 1.67/s. Ratio = 30/100 = 0.30 > 0.25.
+  # 1. ContainerCpuLimitNearExhaustion — utilisation 0.95 sustained for >5m.
+  # `for: 5m` requires the breach to hold for 5 minutes; eval at 7m gives
+  # the for-window time to elapse with margin.
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_cpu_cfs_throttled_periods_total{name="dummy"}'
-        values: '0+30x20'
-      - series: 'container_cpu_cfs_periods_total{name="dummy"}'
-        values: '0+100x20'
+      - series: 'k8s_container_cpu_limit_utilization_ratio{k8s_namespace_name="social",k8s_pod_name="backend-abc",k8s_container_name="backend"}'
+        values: '0.95x10'
     alert_rule_test:
-      - eval_time: 17m
-        alertname: ContainerCpuThrottling
+      - eval_time: 7m
+        alertname: ContainerCpuLimitNearExhaustion
         exp_alerts:
           - exp_labels:
-              name: dummy
-              severity: ticket
+              k8s_namespace_name: social
+              k8s_pod_name: backend-abc
+              k8s_container_name: backend
+              severity: page
+              slo: container_cpu
             exp_annotations:
-              summary: "Container dummy is CPU-throttled (>25% of CFS periods for 10m)."
-              description: "Container `dummy` has been throttled against its CFS CPU quota for more than 25% of periods over a sustained 10-minute window. The container is hitting its `cpus:` cap; raise it in `docker-compose.yml` or investigate the workload spike."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerCpuThrottling.md"
+              summary: "Container social/backend sustained >90% of its CPU limit for 5m."
+              description: "Container `social/backend-abc/backend` has held CPU utilisation above 90% of its declared CPU limit for at least 5 minutes. The kernel CFS scheduler will throttle the container on burst, inflating wall-clock latency for any work it does; raise the limit, right-size the workload, or scale out. See the runbook for the proxy-vs-throttling relationship."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerCpuLimitNearExhaustion.md"
 
   # ---------------------------------------------------------------------------
-  # 2. ContainerCpuThrottling — steady-state ratio of 0.10 (well below 0.25);
-  # alert does NOT fire.
+  # 2. ContainerCpuLimitNearExhaustion — utilisation 0.85 sustained. Expr
+  # `> 0.9` is false at every sample → alert never enters pending; no fire.
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_cpu_cfs_throttled_periods_total{name="dummy"}'
-        values: '0+10x20'
-      - series: 'container_cpu_cfs_periods_total{name="dummy"}'
-        values: '0+100x20'
+      - series: 'k8s_container_cpu_limit_utilization_ratio{k8s_namespace_name="social",k8s_pod_name="backend-abc",k8s_container_name="backend"}'
+        values: '0.85x10'
     alert_rule_test:
-      - eval_time: 17m
-        alertname: ContainerCpuThrottling
+      - eval_time: 7m
+        alertname: ContainerCpuLimitNearExhaustion
         exp_alerts: []
 
   # ---------------------------------------------------------------------------
-  # 3. ContainerMemoryNearLimit — working_set / limit = 0.95 sustained for >5m.
-  # `for: 5m` requires 5 minutes of breach; eval at 7m fires.
+  # 3. ContainerMemoryNearLimit — working-set ratio 0.95 sustained for >5m.
+  # Same shape as the CPU rule; same eval timing.
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_memory_working_set_bytes{name="dummy"}'
-        values: '950x10'
-      - series: 'container_spec_memory_limit_bytes{name="dummy"}'
-        values: '1000x10'
+      - series: 'k8s_container_memory_limit_utilization_ratio{k8s_namespace_name="social",k8s_pod_name="postgres-0",k8s_container_name="postgres"}'
+        values: '0.95x10'
     alert_rule_test:
       - eval_time: 7m
         alertname: ContainerMemoryNearLimit
         exp_alerts:
           - exp_labels:
-              name: dummy
-              severity: ticket
+              k8s_namespace_name: social
+              k8s_pod_name: postgres-0
+              k8s_container_name: postgres
+              severity: page
+              slo: container_memory
             exp_annotations:
-              summary: "Container dummy working set > 90% of its memory limit."
-              description: "Container `dummy` has held its working-set memory above 90% of its declared `mem_limit` for at least 5 minutes. The OOM killer will engage soon if the trend continues; raise the cap in `docker-compose.yml` or investigate the leak."
+              summary: "Container social/postgres working set >90% of its memory limit for 5m."
+              description: "Container `social/postgres-0/postgres` has held memory working set above 90% of its declared memory limit for at least 5 minutes. The Linux OOM killer will engage soon if the trend continues; raise the cap, fix the leak, or scale out. See the runbook."
               runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerMemoryNearLimit.md"
 
   # ---------------------------------------------------------------------------
-  # 4. ContainerMemoryNearLimit — steady-state working_set / limit = 0.50;
-  # alert does NOT fire.
+  # 4. ContainerMemoryNearLimit — working-set ratio 0.85 sustained. Expr
+  # `> 0.9` is false at every sample → no fire.
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_memory_working_set_bytes{name="dummy"}'
-        values: '500x10'
-      - series: 'container_spec_memory_limit_bytes{name="dummy"}'
-        values: '1000x10'
+      - series: 'k8s_container_memory_limit_utilization_ratio{k8s_namespace_name="social",k8s_pod_name="postgres-0",k8s_container_name="postgres"}'
+        values: '0.85x10'
     alert_rule_test:
       - eval_time: 7m
         alertname: ContainerMemoryNearLimit
         exp_alerts: []
 
   # ---------------------------------------------------------------------------
-  # 5. ContainerMemoryNearLimit — un-limited container scenario. Working set
-  # is non-zero but `container_spec_memory_limit_bytes` reports as 0. The
-  # alert's `(... > 0)` guard drops the limit sample for this container, so
-  # the division has no right-hand side and produces no result. Alert does
-  # NOT fire — matches the spec's un-limited-container scenario.
+  # 5. ContainerRestartingFrequently — counter incrementing by 1 every
+  # minute. `increase(k8s_container_restarts[5m])` at eval 7m covers the
+  # window [2m, 7m] which sees a delta of 5 > 1 → alert fires immediately
+  # (no for-window).
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_memory_working_set_bytes{name="unlimited"}'
-        values: '500000000x10'
-      - series: 'container_spec_memory_limit_bytes{name="unlimited"}'
-        values: '0x10'
+      - series: 'k8s_container_restarts{k8s_namespace_name="social",k8s_pod_name="frontend-xyz",k8s_container_name="frontend"}'
+        values: '0+1x10'
     alert_rule_test:
       - eval_time: 7m
-        alertname: ContainerMemoryNearLimit
-        exp_alerts: []
-
-  # ---------------------------------------------------------------------------
-  # 6. ContainerOomKilled — counter increments by 1 inside a 15m window.
-  # `increase(... [15m])` returns ≥ 1 > 0 → alert fires (no `for:` clause).
-  # eval at 16m so the [15m] window fully covers the increment.
-  # ---------------------------------------------------------------------------
-  - interval: 1m
-    input_series:
-      # 0 for 5 minutes, then steps up to 1 and stays — `increase()` over
-      # the trailing 15m sees a delta of 1.
-      - series: 'container_oom_events_total{name="dummy"}'
-        values: '0x5 1x15'
-    alert_rule_test:
-      - eval_time: 16m
-        alertname: ContainerOomKilled
+        alertname: ContainerRestartingFrequently
         exp_alerts:
           - exp_labels:
-              name: dummy
+              k8s_namespace_name: social
+              k8s_pod_name: frontend-xyz
+              k8s_container_name: frontend
               severity: page
+              slo: container_restarts
             exp_annotations:
-              summary: "Container dummy was OOM-killed in the last 15 minutes."
-              description: "cAdvisor recorded at least one OOM-kill event for container `dummy` within the last 15 minutes. The Linux OOM killer terminated the container after it exceeded its `mem_limit`; check the container's working-set history and decide whether to raise the cap or fix an underlying leak."
-              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerOomKilled.md"
+              summary: "Container social/frontend restarted more than once in the last 5m."
+              description: "Container `social/frontend-xyz/frontend` has restarted more than once in the last 5 minutes — a restart loop. The OTel families do not surface the termination reason; the runbook walks the operator through `kubectl describe pod` (Last State), `kubectl logs --previous`, and the loki kubelet stream for OOM-kill log lines."
+              runbook_url: "https://github.com/igor-mircic/prod-ready-social-media-v2/blob/main/infra/runbooks/ContainerRestartingFrequently.md"
 
   # ---------------------------------------------------------------------------
-  # 7. ContainerOomKilled — counter is flat at zero for the whole window.
-  # `increase()` returns 0 → alert does NOT fire.
+  # 6. ContainerRestartingFrequently — a single one-shot restart inside
+  # the 5m window. Counter is 0 for the first 5 minutes, then 1 for the
+  # remainder. At eval 8m the window [3m, 8m] sees a delta of 1; `> 1`
+  # is false; no fire. (Captures the spec's "single startup restart is
+  # not a loop" intent.)
   # ---------------------------------------------------------------------------
   - interval: 1m
     input_series:
-      - series: 'container_oom_events_total{name="dummy"}'
-        values: '0x20'
+      - series: 'k8s_container_restarts{k8s_namespace_name="social",k8s_pod_name="frontend-xyz",k8s_container_name="frontend"}'
+        values: '0x5 1x10'
     alert_rule_test:
-      - eval_time: 16m
-        alertname: ContainerOomKilled
+      - eval_time: 8m
+        alertname: ContainerRestartingFrequently
         exp_alerts: []

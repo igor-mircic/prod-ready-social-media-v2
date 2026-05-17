@@ -104,20 +104,18 @@ jobs:
             check rules \
               /rules/slo-recording.yml /rules/slo-alerting.yml \
               /rules/fe-slo-recording.yml /rules/fe-slo-alerting.yml \
-              /rules/database-alerts.yml
+              /rules/database-alerts.yml \
+              /rules/container-alerts.yml
 
       # The test fixtures sit under `tests/`; each fixture references
       # its target rule files via `../rules/<file>.yml`. Mount the
       # parent `prometheus/` directory so both `tests/` and `rules/`
       # are reachable to promtool inside the container.
       #
-      # `container-tests.yml` is intentionally OMITTED here: slice 22b
-      # retired the compose `container-alerts.yml` and the follow-up
-      # slice `add-k8s-container-saturation-alerts` owns the OTel-
-      # shaped rewrite. The fixture is kept at
-      # `infra/k8s-obs/base/prometheus/tests/container-tests.yml` as
-      # a historical record; it re-enters this list when the rules
-      # file lands.
+      # `container-tests.yml` was added by
+      # `add-k8s-container-saturation-alerts` (slice closing the gap
+      # slice 22b deferred); it exercises the three OTel-family rules
+      # in `../rules/container-alerts.yml`.
       - name: Run rule unit tests (promtool test rules)
         run: |
           docker run --rm \
@@ -127,7 +125,8 @@ jobs:
             test rules \
               /prometheus/tests/slo-tests.yml \
               /prometheus/tests/fe-slo-tests.yml \
-              /prometheus/tests/database-tests.yml
+              /prometheus/tests/database-tests.yml \
+              /prometheus/tests/container-tests.yml
 
   frontend:
     name: frontend (gen + test + build)
